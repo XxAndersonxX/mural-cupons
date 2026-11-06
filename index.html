@@ -149,6 +149,11 @@ td.num,th.num{text-align:right}
       <button class="btn" type="submit">Entrar</button>
     </form>
     <p class="msg bad" id="msgLogin"></p>
+    <div class="linha" id="acoesErro" hidden>
+      <button class="btn sec" type="button" id="btnPerfil" hidden>Definir nome de usuário</button>
+      <button class="btn sec" type="button" id="btnTentar">Tentar de novo</button>
+      <button class="btn sec" type="button" id="btnSairErro">Sair</button>
+    </div>
   </div>
 </div>
 
@@ -282,6 +287,7 @@ function criarLojaReal() {
 
   const erroAmigavel = e => {
     const m = (e && (e.message || e.details)) || String(e);
+    if (m.includes("conta_sem_username")) return "Sua conta ainda não tem nome de usuário. Clique em “Definir nome de usuário”, salve e depois em “Tentar de novo”.";
     if (m.includes("sem_username_no_token")) return "O token do Clerk não traz o nome de usuário. Veja o passo 'Personalizar o session token' no README.";
     if (m.includes("nao_logado")) return "Sua sessão expirou. Entre de novo.";
     if (m.includes("JWT") || m.includes("401")) return "O Supabase recusou o login do Clerk. Confira a integração Clerk ↔ Supabase (README).";
@@ -302,17 +308,36 @@ function criarLojaReal() {
         accessToken: async () => (await window.Clerk.session?.getToken()) ?? null,
       });
 
-      const entrar = async () => {
+      const chamarEntrar = async () => {
         const { data, error } = await sb.rpc("entrar");
         if (error) throw error;
-        aoEntrar({ id: window.Clerk.user.id, nome: data });
+        return data;
       };
+      const entrar = async () => {
+        // conta criada antes de ligar o "Username" no Clerk: pede para definir um
+        if (!window.Clerk.user.username) {
+          const e = new Error("conta_sem_username");
+          e.semUsername = true;
+          throw e;
+        }
+        let nome;
+        try {
+          nome = await chamarEntrar();
+        } catch (e) {
+          if (!String(e.message || "").includes("sem_username_no_token")) throw e;
+          // token antigo em cache (de antes de personalizar o session token): pede um novo
+          await window.Clerk.session.getToken({ skipCache: true });
+          nome = await chamarEntrar();
+        }
+        aoEntrar({ id: window.Clerk.user.id, nome });
+      };
+      this._entrarDeNovo = entrar;
 
       if (window.Clerk.isSignedIn) return entrar();
       mostrarLogin("Entre com seu usuário e senha. Não tem conta? Use “Sign up”.");
       window.Clerk.mountSignIn($("clerkSignIn"));
       window.Clerk.addListener(({ user }) => {
-        if (user && !this._entrou) { this._entrou = true; window.Clerk.unmountSignIn($("clerkSignIn")); entrar().catch(e => mostrarLogin("", erroAmigavel(e))); }
+        if (user && !this._entrou) { this._entrou = true; window.Clerk.unmountSignIn($("clerkSignIn")); entrar().catch(e => mostrarLogin("Não foi possível entrar.", erroAmigavel(e), !!e.semUsername)); }
       });
     },
     async sair() { await window.Clerk.signOut(); location.reload(); },
@@ -606,11 +631,17 @@ $("btnSair").addEventListener("click", () => loja.sair());
 $("avisoDemo").hidden = loja.modo !== "demo";
 rota(); calcular();
 
-function mostrarLogin(texto, erro = "") {
+function mostrarLogin(texto, erro = "", semUsername = false) {
   $("telaLogin").hidden = false;
   if (texto) $("textoLogin").textContent = texto;
   $("msgLogin").textContent = erro;
+  const temSessao = loja.modo === "real" && window.Clerk?.isSignedIn;
+  $("acoesErro").hidden = !(erro && temSessao);
+  $("btnPerfil").hidden = !semUsername;
 }
+$("btnPerfil").addEventListener("click", () => window.Clerk?.openUserProfile());
+$("btnSairErro").addEventListener("click", () => loja.sair());
+$("btnTentar").addEventListener("click", () => location.reload());
 
 loja.iniciar(usuario => {
   eu = usuario;
@@ -620,7 +651,7 @@ loja.iniciar(usuario => {
   setInterval(() => { if (!document.hidden) atualizar(); }, ATUALIZAR_A_CADA_MS);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); });
   setInterval(() => { renderPlats(); renderLista(); }, 30000);   // "vence em" e tira os vencidos
-}, mostrarLogin).catch(e => { console.error(e); mostrarLogin("Não foi possível carregar o login.", loja.erroAmigavel(e)); });
+}, mostrarLogin).catch(e => { console.error(e); mostrarLogin("Não foi possível entrar.", loja.erroAmigavel(e), !!e.semUsername); });
 </script>
 </body>
 </html>
