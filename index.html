@@ -125,8 +125,10 @@ td.num,th.num{text-align:right}
 .calc-res strong{font-family:var(--display);font-size:26px;font-variant-numeric:tabular-nums}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 
-.login{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;place-items:center;padding:24px max(16px,env(safe-area-inset-left,0px));overflow-y:auto}
+.login{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;place-items:safe center;padding:24px max(16px,env(safe-area-inset-left,0px));overflow-y:auto}
 .login .caixa{max-width:420px;width:100%;display:grid;gap:12px;justify-items:center}
+#clerkSignIn{max-width:100%;overflow-x:auto}
+.login .caixa:has(.cl-userProfile-root){max-width:900px}
 .login .painel{width:100%;display:grid;gap:12px}
 .aviso-demo{background:var(--warn-soft);color:var(--warn);font-size:13px;font-weight:700;text-align:center;padding:6px 12px}
 </style>
@@ -639,7 +641,17 @@ function mostrarLogin(texto, erro = "", semUsername = false) {
   $("acoesErro").hidden = !(erro && temSessao);
   $("btnPerfil").hidden = !semUsername;
 }
-$("btnPerfil").addEventListener("click", () => window.Clerk?.openUserProfile());
+// perfil do Clerk embutido na própria tela (o popup ficava atrás da tela de login)
+$("btnPerfil").addEventListener("click", () => {
+  const alvo = $("clerkSignIn");
+  try { window.Clerk.unmountSignIn(alvo); } catch {}
+  try { window.Clerk.unmountUserProfile(alvo); } catch {}
+  window.Clerk.mountUserProfile(alvo);
+  $("btnPerfil").hidden = true;
+  $("btnTentar").textContent = "Já defini, entrar";
+  $("msgLogin").textContent = "Em “Username”, defina seu nome de usuário e salve. Depois clique em “Já defini, entrar”.";
+  alvo.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 $("btnSairErro").addEventListener("click", () => loja.sair());
 $("btnTentar").addEventListener("click", () => location.reload());
 
