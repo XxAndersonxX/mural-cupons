@@ -6,7 +6,8 @@ Site para um grupo de amigos compartilhar códigos de cupom das plataformas 777,
 - Códigos guardados no [Supabase](https://supabase.com)
 - Site hospedado de graça no **GitHub Pages**
 - Cada código some depois de ser pego por **3 pessoas diferentes** ou **2 dias** depois de postado
-- Abas: Plataformas, Usuários, Ranking e Calculadora
+- Abas: Plataformas, Usuários, Ranking, Calculadora e Admin
+- **Acesso por aprovação:** qualquer pessoa pode criar conta e pedir para entrar, mas só vê os cupons depois que um administrador aprovar
 
 Arquivos:
 
@@ -14,9 +15,11 @@ Arquivos:
 |---|---|
 | `index.html` | O site inteiro |
 | `supabase.sql` | Cria o banco e as regras (rodar 1 vez no Supabase) |
+| `migrations/` | Mudanças do banco, em ordem (`001_membros.sql`…), cada uma com seu `_down.sql` para reverter |
+| `tests/` | Testes de segurança e concorrência (rodam num Postgres local, nunca no Supabase) |
 | `README.md` | Este passo a passo |
 
-Abrindo o `index.html` sem configurar nada, o site roda em **modo demonstração**: login só com nome e dados salvos só no seu navegador. Serve para ver como fica.
+Com as **três chaves vazias** no `index.html`, o site roda em **modo demonstração**: login só com nome e dados só no seu navegador. Com as chaves preenchidas, ele **nunca** cai no modo demonstração: se o Clerk ou o Supabase não carregarem, aparece uma mensagem de erro.
 
 ---
 
@@ -24,6 +27,7 @@ Abrindo o `index.html` sem configurar nada, o site roda em **modo demonstração
 
 1. Crie uma conta em <https://supabase.com> e clique em **New project**. Região: **South America (São Paulo)**. Guarde a senha do banco, mas o site não usa ela.
 2. Abra **SQL Editor** → **New query**, cole todo o conteúdo de `supabase.sql` e clique em **Run**. Deve aparecer "Success".
+   Depois rode, na ordem, cada arquivo de `migrations/` que **não** termina em `_down.sql` (hoje: `001_membros.sql`).
 3. Vá em **Project Settings → API** (ou **Data API / API Keys**) e copie:
    - **Project URL** (ex.: `https://abcd1234.supabase.co`)
    - a chave **publishable** (ou **anon public**). **Nunca** use a `service_role` / `secret` no site.
@@ -102,3 +106,35 @@ Para adicionar ou trocar plataformas, altere a lista nos **dois** lugares:
   alter table public.codigos add constraint codigos_plataforma_check
     check (plataforma in ('777','BRA365','Sorte25','77','NOVA'));
   ```
+
+## Membros e administradores
+
+| Papel | O que pode |
+|---|---|
+| **pendente** | Criou conta e pediu acesso. Não vê cupons, ranking nem usuários. |
+| **membro** | Usa o mural: vê, posta e pega cupons. |
+| **admin** | Tudo de membro + aprova, recusa, suspende, reativa e promove/remove administradores (aba **Admin**). |
+
+- Qualquer pessoa pode se cadastrar pelo Clerk; o cadastro vira um **pedido de acesso** que aparece na aba Admin.
+- Um membro ou admin pode ser **suspenso** (perde o acesso na hora) e **reativado** depois.
+- Ninguém altera o próprio acesso, e o mural nunca fica sem pelo menos um admin ativo.
+- Se dois admins mexerem no mesmo usuário ao mesmo tempo, a segunda ação é recusada e a lista é atualizada.
+- Toda ação de admin fica no **Histórico** com quem fez, quando e o motivo.
+
+**Primeiro administrador (uma vez só):** depois de rodar a migração 001, entre no site com a sua conta (vai aparecer "Solicitação enviada") e rode no SQL Editor:
+
+```sql
+select public.definir_primeiro_admin('SEU_USERNAME');
+```
+
+Essa função só funciona enquanto não existir nenhum admin e não pode ser chamada pelo site. Os próximos admins são promovidos pela própria aba Admin.
+
+## Testes (para quem mexer no banco)
+
+Num Postgres local descartável (nunca no Supabase):
+
+```bash
+PSQL_BASE="psql -h localhost -p 5432 -U postgres" tests/rodar_local.sh
+```
+
+Roda o banco original com dados, aplica a migração, os testes de segurança e de concorrência, reverte e reaplica.

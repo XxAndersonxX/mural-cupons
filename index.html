@@ -130,6 +130,14 @@ td.num,th.num{text-align:right}
 #clerkSignIn{max-width:100%;overflow-x:auto}
 .login .caixa:has(.cl-userProfile-root){max-width:900px}
 .login .painel{width:100%;display:grid;gap:12px}
+.faixa-erro{background:var(--warn-soft);color:var(--bad);font-size:14px;font-weight:700;padding:10px 0}
+.faixa-erro .wrap{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.status-caixa{width:100%;text-align:center;display:grid;gap:8px}
+.status-caixa .icone{font-size:34px}
+.confirma{display:grid;gap:10px;border:1px solid var(--accent);background:var(--accent-soft);border-radius:var(--r);padding:14px}
+.acoes-admin{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.evento{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.evento time{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .aviso-demo{background:var(--warn-soft);color:var(--warn);font-size:13px;font-weight:700;text-align:center;padding:6px 12px}
 </style>
 </head>
@@ -150,7 +158,12 @@ td.num,th.num{text-align:right}
       </div>
       <button class="btn" type="submit">Entrar</button>
     </form>
-    <p class="msg bad" id="msgLogin"></p>
+    <div class="status-caixa" id="statusAcesso" hidden>
+      <div class="icone" id="statusIcone" aria-hidden="true">⏳</div>
+      <h2 id="statusTitulo">Solicitação enviada</h2>
+      <p class="sub" id="statusTexto"></p>
+    </div>
+    <p class="msg bad" id="msgLogin" role="alert"></p>
     <div class="linha" id="acoesErro" hidden>
       <button class="btn sec" type="button" id="btnPerfil" hidden>Definir nome de usuário</button>
       <button class="btn sec" type="button" id="btnTentar">Tentar de novo</button>
@@ -170,9 +183,13 @@ td.num,th.num{text-align:right}
       <a href="#usuarios">Usuários</a>
       <a href="#ranking">Ranking</a>
       <a href="#calculadora">Calculadora</a>
+      <a href="#admin" id="navAdmin" hidden>Admin <span class="tag warn" id="badgePend" hidden></span></a>
     </nav>
   </div>
 </header>
+<div class="faixa-erro" id="faixaErro" role="alert" hidden>
+  <div class="wrap"><span id="faixaErroTexto"></span><button class="btn sec min" type="button" id="btnFaixaTentar">Tentar de novo</button></div>
+</div>
 
 <main class="wrap">
 
@@ -261,93 +278,183 @@ td.num,th.num{text-align:right}
       </div>
     </div>
   </section>
+  <section id="v-admin" data-view hidden>
+    <h1>Administração</h1>
+    <p class="sub">Aprove quem pediu para entrar e gerencie os membros. Tudo fica registrado no histórico.</p>
+    <div style="display:grid;gap:18px;margin-top:14px">
+      <div class="confirma" id="confirmaAdmin" hidden>
+        <strong id="confirmaTexto"></strong>
+        <div><label for="inMotivo">Motivo (opcional, aparece no histórico)</label>
+          <input type="text" id="inMotivo" maxlength="300" placeholder="ex.: pediu para sair do grupo"></div>
+        <div class="linha"><button class="btn" type="button" id="btnConfirmar">Confirmar</button>
+          <button class="btn sec" type="button" id="btnCancelar">Cancelar</button></div>
+      </div>
+      <p class="msg" id="msgAdmin" role="status"></p>
+      <div class="painel tab-wrap">
+        <h2>Pedidos de acesso</h2>
+        <table><thead><tr><th>Usuário</th><th>Pediu em</th><th></th></tr></thead><tbody id="tbPendentes"></tbody></table>
+      </div>
+      <div class="painel tab-wrap">
+        <h2>Membros</h2>
+        <table><thead><tr><th>Usuário</th><th>Papel</th><th>Situação</th><th></th></tr></thead><tbody id="tbMembros"></tbody></table>
+      </div>
+      <div class="painel tab-wrap" id="painelRejeitados" hidden>
+        <h2>Pedidos recusados</h2>
+        <table><thead><tr><th>Usuário</th><th>Pediu em</th><th></th></tr></thead><tbody id="tbRejeitados"></tbody></table>
+      </div>
+      <div class="painel">
+        <h2>Histórico recente</h2>
+        <div id="listaEventos"></div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <script>
 /* =====================================================================
-   Lojas de dados: Clerk + Supabase (real) ou demonstração (local)
-   Cada loja expõe: iniciar(aoEntrar), sair(), carregar(),
-   postar(plat, codigos), pegar(id), apagar(id)
+   Configuração e erros
    ===================================================================== */
 const $ = id => document.getElementById(id);
 const codigoValido = c => /^[A-Za-z0-9_-]{2,64}$/.test(c);
+
+// Demonstração SÓ quando as três chaves estão vazias de propósito.
+// Com as chaves preenchidas, qualquer falha vira erro na tela (nunca modo demo).
+const MODO_DEMO = !CLERK_PUBLISHABLE_KEY && !SUPABASE_URL && !SUPABASE_KEY;
+const CONFIG_INCOMPLETA = !MODO_DEMO && !(CLERK_PUBLISHABLE_KEY && SUPABASE_URL && SUPABASE_KEY);
+
+// versões fixas (as do Clerk saem juntas; trocar as duas ao mesmo tempo)
+const CLERK_JS_VERSAO = "6.40.0";
+const CLERK_UI_VERSAO = "1.41.0";
+const PRAZO_CARREGAR_MS = 20000;
+
+function erroCom(codigo) { const e = new Error(codigo); e.codigo = codigo; return e; }
+
+const CODIGOS_CONHECIDOS = [
+  "config_incompleta", "supabase_indisponivel", "clerk_indisponivel", "conta_sem_username",
+  "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
+  "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
+  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez",
+];
+const MENSAGENS = {
+  config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
+  supabase_indisponivel: "Não foi possível carregar a conexão com o banco (Supabase). Verifique a internet ou desative bloqueadores (AdBlock, Brave Shields) para este site e tente de novo.",
+  clerk_indisponivel: "Não foi possível carregar o login (Clerk). Verifique a internet ou desative bloqueadores (AdBlock, Brave Shields) para este site e tente de novo.",
+  conta_sem_username: "Sua conta ainda não tem nome de usuário. Clique em “Definir nome de usuário”, salve e depois em “Já defini, entrar”.",
+  sem_username_no_token: "O login não enviou seu nome de usuário. Se você acabou de defini-lo, clique em “Tentar de novo”. Se continuar, um administrador precisa conferir o “session token” no Clerk (README).",
+  username_invalido: "Seu nome de usuário só pode ter letras, números, ponto, - ou _ (2 a 40). Altere em “Definir nome de usuário”.",
+  nome_em_uso: "Esse nome de usuário já pertence a outra pessoa do mural. Escolha outro em “Definir nome de usuário”.",
+  nao_logado: "Sua sessão expirou. Entre de novo.",
+  acesso_negado: "Seu acesso ao mural não está ativo no momento.",
+  nao_admin: "Só administradores podem fazer isso.",
+  nao_pode_alterar_a_si_mesmo: "Você não pode alterar o próprio acesso. Peça a outro administrador.",
+  estado_mudou: "Outro administrador alterou esse usuário agora há pouco. A lista foi atualizada: confira e tente de novo.",
+  acao_invalida: "Essa ação não vale para a situação atual desse usuário. A lista foi atualizada.",
+  ultimo_admin: "O mural precisa de pelo menos um administrador ativo.",
+  motivo_longo: "O motivo pode ter no máximo 300 caracteres.",
+  usuario_inexistente: "Esse usuário não existe mais. A lista foi atualizada.",
+  maximo_200_por_vez: "Máximo de 200 códigos por vez.",
+  jwt_recusado: "O banco recusou o login. Saia e entre de novo; se continuar, confira a integração Clerk ↔ Supabase (README).",
+  sem_conexao: "Sem conexão com o servidor. Verifique a internet e tente de novo.",
+};
+const PEDE_PERFIL = new Set(["conta_sem_username", "username_invalido", "nome_em_uso"]);
+
+function codigoDoErro(e) {
+  if (e && e.codigo) return e.codigo;
+  const m = String((e && (e.message || e.details || e.hint)) || e || "");
+  const c = CODIGOS_CONHECIDOS.find(k => m.includes(k));
+  if (c) return c;
+  if (/JWT|PGRST301|401/.test(m)) return "jwt_recusado";
+  if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return "sem_conexao";
+  return "desconhecido";
+}
+function mensagemDeErro(e) {
+  const c = codigoDoErro(e);
+  return MENSAGENS[c] || `Algo deu errado. Detalhe técnico: ${String((e && e.message) || e).slice(0, 140)}`;
+}
 
 function carregarScript(src, attrs = {}) {
   return new Promise((ok, falha) => {
     const s = document.createElement("script");
     s.src = src; s.async = true; s.crossOrigin = "anonymous";
     Object.entries(attrs).forEach(([k, v]) => s.setAttribute(k, v));
-    s.onload = ok; s.onerror = () => falha(new Error("Falha ao carregar " + src));
+    const t = setTimeout(() => falha(new Error("prazo")), PRAZO_CARREGAR_MS);
+    s.onload = () => { clearTimeout(t); ok(); };
+    s.onerror = () => { clearTimeout(t); falha(new Error("falha ao carregar " + src)); };
     document.head.appendChild(s);
   });
 }
+const comPrazo = (promessa, ms, codigo) =>
+  Promise.race([promessa, new Promise((_, falha) => setTimeout(() => falha(erroCom(codigo)), ms))]);
 
+const temAcesso = p => !!p && (p.papel === "membro" || p.papel === "admin") && p.situacao === "ativo";
+
+/* =====================================================================
+   Loja real: Clerk + Supabase
+   ===================================================================== */
 function criarLojaReal() {
-  // o domínio do Clerk vem embutido na chave: pk_test_<base64("dominio$")>
   const fapi = atob(CLERK_PUBLISHABLE_KEY.split("_")[2]).replace(/\$$/, "");
   let sb = null;
 
-  const erroAmigavel = e => {
-    const m = (e && (e.message || e.details)) || String(e);
-    if (m.includes("conta_sem_username")) return "Sua conta ainda não tem nome de usuário. Clique em “Definir nome de usuário”, salve e depois em “Tentar de novo”.";
-    if (m.includes("sem_username_no_token")) return "O token do Clerk não traz o nome de usuário. Veja o passo 'Personalizar o session token' no README.";
-    if (m.includes("nao_logado")) return "Sua sessão expirou. Entre de novo.";
-    if (m.includes("JWT") || m.includes("401")) return "O Supabase recusou o login do Clerk. Confira a integração Clerk ↔ Supabase (README).";
-    return "Não foi possível falar com o servidor. Verifique a conexão.";
+  const rpc = async (nome, args) => {
+    const { data, error } = await sb.rpc(nome, args);
+    if (error) throw error;
+    return data;
   };
 
   return {
     modo: "real",
-    erroAmigavel,
     async iniciar(aoEntrar, mostrarLogin) {
-      await carregarScript(`https://${fapi}/npm/@clerk/ui@1/dist/ui.browser.js`);
-      await carregarScript(`https://${fapi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`,
-                           { "data-clerk-publishable-key": CLERK_PUBLISHABLE_KEY });
+      if (!window.supabase || !window.supabase.createClient) throw erroCom("supabase_indisponivel");
+      try {
+        await carregarScript(`https://${fapi}/npm/@clerk/ui@${CLERK_UI_VERSAO}/dist/ui.browser.js`);
+        await carregarScript(`https://${fapi}/npm/@clerk/clerk-js@${CLERK_JS_VERSAO}/dist/clerk.browser.js`,
+                             { "data-clerk-publishable-key": CLERK_PUBLISHABLE_KEY });
+      } catch { throw erroCom("clerk_indisponivel"); }
+      if (!window.Clerk) throw erroCom("clerk_indisponivel");
       const opcoes = window.__internal_ClerkUICtor ? { ui: { ClerkUI: window.__internal_ClerkUICtor } } : {};
-      await window.Clerk.load(opcoes);
+      await comPrazo(window.Clerk.load(opcoes), PRAZO_CARREGAR_MS, "clerk_indisponivel");
 
-      sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
         accessToken: async () => (await window.Clerk.session?.getToken()) ?? null,
       });
 
-      const chamarEntrar = async () => {
-        const { data, error } = await sb.rpc("entrar");
-        if (error) throw error;
-        return data;
-      };
       const entrar = async () => {
-        // conta criada antes de ligar o "Username" no Clerk: pede para definir um
-        if (!window.Clerk.user.username) {
-          const e = new Error("conta_sem_username");
-          e.semUsername = true;
-          throw e;
-        }
-        let nome;
+        if (!window.Clerk.user.username) throw erroCom("conta_sem_username");
+        let perfil;
         try {
-          nome = await chamarEntrar();
+          perfil = await rpc("entrar");
         } catch (e) {
-          if (!String(e.message || "").includes("sem_username_no_token")) throw e;
-          // token antigo em cache (de antes de personalizar o session token): pede um novo
+          if (codigoDoErro(e) !== "sem_username_no_token") throw e;
+          // token em cache de antes do username existir: pede um novo e tenta uma vez
           await window.Clerk.session.getToken({ skipCache: true });
-          nome = await chamarEntrar();
+          perfil = await rpc("entrar");
         }
-        aoEntrar({ id: window.Clerk.user.id, nome });
+        aoEntrar(perfil);
       };
-      this._entrarDeNovo = entrar;
 
       if (window.Clerk.isSignedIn) return entrar();
-      mostrarLogin("Entre com seu usuário e senha. Não tem conta? Use “Sign up”.");
+      mostrarLogin({ texto: "Entre com seu usuário e senha. Primeira vez? Use “Sign up” e peça acesso." });
       window.Clerk.mountSignIn($("clerkSignIn"));
+      let entrou = false;
       window.Clerk.addListener(({ user }) => {
-        if (user && !this._entrou) { this._entrou = true; window.Clerk.unmountSignIn($("clerkSignIn")); entrar().catch(e => mostrarLogin("Não foi possível entrar.", erroAmigavel(e), !!e.semUsername)); }
+        if (!user || entrou) return;
+        entrou = true;
+        try { window.Clerk.unmountSignIn($("clerkSignIn")); } catch {}
+        entrar().catch(e => mostrarLogin({ texto: "Não foi possível entrar.", erro: e }));
       });
     },
-    async sair() { await window.Clerk.signOut(); location.reload(); },
+    async sair() { try { await window.Clerk.signOut(); } finally { location.reload(); } },
+    // leitura da própria linha (o RLS sempre permite): detecta aprovação/suspensão sem gravar nada
+    async estadoProprio() {
+      const id = window.Clerk?.user?.id;
+      if (!id) throw erroCom("nao_logado");
+      const { data, error } = await sb.from("usuarios").select("id,nome,papel,situacao").eq("id", id).maybeSingle();
+      if (error) throw error;
+      if (!data) throw erroCom("nao_logado");
+      return { ...data, acesso: temAcesso(data) };
+    },
     async carregar() {
-      const [a, b] = await Promise.all([
-        sb.from("codigos_ativos").select("*"),
-        sb.from("ranking").select("*"),
-      ]);
+      const [a, b] = await Promise.all([sb.from("codigos_ativos").select("*"), sb.from("ranking").select("*")]);
       if (a.error) throw a.error;
       if (b.error) throw b.error;
       return {
@@ -357,43 +464,55 @@ function criarLojaReal() {
                                      criadoEm: Date.parse(u.criado_em) })),
       };
     },
-    async postar(plataforma, codigos) {
-      const { data, error } = await sb.rpc("postar_codigos", { p_plataforma: plataforma, p_codigos: codigos });
+    postar: (plataforma, codigos) => rpc("postar_codigos", { p_plataforma: plataforma, p_codigos: codigos }),
+    pegar: id => rpc("copiar_codigo", { p_id: id }),
+    apagar: id => rpc("apagar_codigo", { p_id: id }),
+    async adminUsuarios() {
+      const { data, error } = await sb.from("usuarios").select("id,nome,papel,situacao,criado_em,atualizado_em").order("criado_em");
       if (error) throw error;
       return data;
     },
-    async pegar(id) {
-      const { data, error } = await sb.rpc("copiar_codigo", { p_id: id });
+    async adminEventos() {
+      const { data, error } = await sb.from("eventos_acesso").select("*").order("criado_em", { ascending: false }).limit(30);
       if (error) throw error;
       return data;
     },
-    async apagar(id) {
-      const { error } = await sb.rpc("apagar_codigo", { p_id: id });
-      if (error) throw error;
-    },
+    alterarAcesso: (alvo, acao, motivo, versao) =>
+      rpc("admin_alterar_acesso", { p_alvo: alvo, p_acao: acao, p_motivo: motivo || null, p_versao: versao || null }),
   };
 }
 
+/* =====================================================================
+   Loja de demonstração (só com as três chaves vazias)
+   Primeiro nome usado vira admin; os seguintes ficam pendentes.
+   ===================================================================== */
 function criarLojaDemo() {
-  const CH = "mural-cupons-demo";
-  const ler = () => { try { return JSON.parse(localStorage.getItem(CH)) || { usuarios: {}, codigos: [], seq: 1 }; } catch { return { usuarios: {}, codigos: [], seq: 1 }; } };
+  const CH = "mural-cupons-demo-v2";
+  const vazio = () => ({ usuarios: {}, codigos: [], eventos: [], seq: 1 });
+  const ler = () => { try { return JSON.parse(localStorage.getItem(CH)) || vazio(); } catch { return vazio(); } };
   const gravar = e => { try { localStorage.setItem(CH, JSON.stringify(e)); } catch {} };
-  const ativo = c => c.copiadoPor.length < MAX_COPIAS && c.criadoEm + VALIDADE_MS > Date.now();
-  let eu = null;
+  const agora = () => new Date().toISOString();
+  const ativoC = c => c.copiadoPor.length < MAX_COPIAS && c.criadoEm + VALIDADE_MS > Date.now();
+  let meuId = null;
+  const exigeMembro = e => { if (!temAcesso(e.usuarios[meuId])) throw erroCom("acesso_negado"); };
+
   return {
     modo: "demo",
-    erroAmigavel: e => String(e.message || e),
     async iniciar(aoEntrar, mostrarLogin) {
       let salvo = null; try { salvo = localStorage.getItem("mural-eu"); } catch {}
       const entrar = nome => {
-        const e = ler(), id = nome.toLowerCase();
-        if (!e.usuarios[id]) e.usuarios[id] = { id, nome, criadoEm: Date.now() };
-        gravar(e); eu = e.usuarios[id];
+        const e = ler(), id = "demo_" + nome.toLowerCase();
+        if (!e.usuarios[id]) {
+          const primeiro = !Object.keys(e.usuarios).length;
+          e.usuarios[id] = { id, nome, papel: primeiro ? "admin" : "pendente", situacao: "ativo", criado_em: agora(), atualizado_em: agora() };
+          e.eventos.unshift({ id: e.seq++, alvo_id: id, acao: primeiro ? "primeiro_admin" : "solicitou", criado_em: agora() });
+        }
+        gravar(e); meuId = id;
         try { localStorage.setItem("mural-eu", nome); } catch {}
-        aoEntrar({ id, nome: eu.nome });
+        aoEntrar({ ...e.usuarios[id], acesso: temAcesso(e.usuarios[id]) });
       };
       if (salvo) return entrar(salvo);
-      mostrarLogin("Modo demonstração: entre só com um nome.");
+      mostrarLogin({ texto: "Modo demonstração: entre só com um nome. O primeiro nome vira administrador." });
       $("formDemo").hidden = false;
       $("formDemo").addEventListener("submit", ev => {
         ev.preventDefault();
@@ -403,12 +522,13 @@ function criarLojaDemo() {
       });
     },
     async sair() { try { localStorage.removeItem("mural-eu"); } catch {} location.reload(); },
+    async estadoProprio() { const u = ler().usuarios[meuId]; return { ...u, acesso: temAcesso(u) }; },
     async carregar() {
-      const e = ler();
+      const e = ler(); exigeMembro(e);
       const nomes = Object.fromEntries(Object.values(e.usuarios).map(u => [u.id, u.nome]));
-      const codigos = e.codigos.filter(ativo).map(c => ({ ...c, autor: nomes[c.autorId], copias: c.copiadoPor.length }));
-      const usuarios = Object.values(e.usuarios).map(u => ({
-        ...u,
+      const codigos = e.codigos.filter(ativoC).map(c => ({ ...c, autor: nomes[c.autorId], copias: c.copiadoPor.length }));
+      const usuarios = Object.values(e.usuarios).filter(temAcesso).map(u => ({
+        id: u.id, nome: u.nome, criadoEm: Date.parse(u.criado_em),
         postados: e.codigos.filter(c => c.autorId === u.id).length,
         copiados: e.codigos.filter(c => c.copiadoPor.includes(u.id)).length,
         ativos: codigos.filter(c => c.autorId === u.id).length,
@@ -416,27 +536,49 @@ function criarLojaDemo() {
       return { codigos, usuarios };
     },
     async postar(plataforma, lista) {
-      const e = ler(); let adicionados = 0; const repetidos = [];
+      const e = ler(); exigeMembro(e); let adicionados = 0; const repetidos = [];
       for (const codigo of lista) {
         if (e.codigos.some(c => c.plataforma === plataforma && c.codigo === codigo && c.criadoEm + VALIDADE_MS > Date.now())) { repetidos.push(codigo); continue; }
-        e.codigos.push({ id: e.seq++, plataforma, codigo, autorId: eu.id, criadoEm: Date.now(), copiadoPor: [] });
+        e.codigos.push({ id: e.seq++, plataforma, codigo, autorId: meuId, criadoEm: Date.now(), copiadoPor: [] });
         adicionados++;
       }
       gravar(e); return { adicionados, repetidos };
     },
     async pegar(id) {
-      const e = ler(), c = e.codigos.find(x => x.id === id);
-      if (!c || !ativo(c) || c.autorId === eu.id || c.copiadoPor.includes(eu.id)) return false;
-      c.copiadoPor.push(eu.id); gravar(e); return true;
+      const e = ler(); exigeMembro(e); const c = e.codigos.find(x => x.id === id);
+      if (!c || !ativoC(c) || c.autorId === meuId || c.copiadoPor.includes(meuId)) return false;
+      c.copiadoPor.push(meuId); gravar(e); return true;
     },
     async apagar(id) {
-      const e = ler(); e.codigos = e.codigos.filter(c => !(c.id === id && c.autorId === eu.id && !c.copiadoPor.length)); gravar(e);
+      const e = ler(); exigeMembro(e); const antes = e.codigos.length;
+      e.codigos = e.codigos.filter(c => !(c.id === id && c.autorId === meuId && !c.copiadoPor.length)); gravar(e);
+      return e.codigos.length < antes;
+    },
+    async adminUsuarios() { const e = ler(); if (e.usuarios[meuId]?.papel !== "admin") throw erroCom("nao_admin"); return Object.values(e.usuarios); },
+    async adminEventos() { return ler().eventos.slice(0, 30); },
+    async alterarAcesso(alvo, acao, motivo, versao) {
+      const e = ler(), eu = e.usuarios[meuId], u = e.usuarios[alvo];
+      if (!(eu && eu.papel === "admin" && eu.situacao === "ativo")) throw erroCom("nao_admin");
+      if (alvo === meuId) throw erroCom("nao_pode_alterar_a_si_mesmo");
+      if (!u) throw erroCom("usuario_inexistente");
+      if (versao && u.atualizado_em !== versao) throw erroCom("estado_mudou");
+      const regras = {
+        aprovar: [u.papel === "pendente", "membro", "ativo", "aprovou"],
+        rejeitar: [u.papel === "pendente" && u.situacao === "ativo", "pendente", "rejeitado", "rejeitou"],
+        suspender: [u.papel !== "pendente" && u.situacao === "ativo", u.papel, "suspenso", "suspendeu"],
+        reativar: [u.papel !== "pendente" && u.situacao === "suspenso", u.papel, "ativo", "reativou"],
+        promover_admin: [u.papel === "membro" && u.situacao === "ativo", "admin", "ativo", "promoveu_admin"],
+        remover_admin: [u.papel === "admin", "membro", u.situacao, "removeu_admin"],
+      }[acao];
+      if (!regras || !regras[0]) throw erroCom("acao_invalida");
+      Object.assign(u, { papel: regras[1], situacao: regras[2], atualizado_em: agora() });
+      e.eventos.unshift({ id: e.seq++, alvo_id: alvo, por_id: meuId, acao: regras[3], motivo: motivo || null, criado_em: agora() });
+      gravar(e); return { id: alvo, nome: u.nome, papel: u.papel, situacao: u.situacao };
     },
   };
 }
 
-const configurado = CLERK_PUBLISHABLE_KEY && SUPABASE_URL && SUPABASE_KEY && window.supabase;
-const loja = configurado ? criarLojaReal() : criarLojaDemo();
+const loja = MODO_DEMO ? criarLojaDemo() : criarLojaReal();
 
 /* =====================================================================
    Interface
@@ -444,8 +586,10 @@ const loja = configurado ? criarLojaReal() : criarLojaDemo();
 const brl = v => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cores = { "777": "var(--p777)", "BRA365": "var(--pbra)", "Sorte25": "var(--psorte)", "77": "var(--p77)" };
+const dataHora = iso => new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
 let eu = null, usuarios = [], codigos = [];
+let adminUsuarios = [], adminEventos = [];
 let plataforma = PLATAFORMAS[0];
 try { plataforma = localStorage.getItem("mural-plat") || plataforma; } catch {}
 if (!PLATAFORMAS.includes(plataforma)) plataforma = PLATAFORMAS[0];
@@ -467,17 +611,67 @@ async function copiarTexto(t) {
   }
 }
 
+/* ---------- tela de login / status ---------- */
+function mostrarLogin({ texto = "", erro = null } = {}) {
+  $("telaLogin").hidden = false;
+  $("statusAcesso").hidden = true;
+  if (texto) $("textoLogin").textContent = texto;
+  $("textoLogin").hidden = !texto;
+  const codigo = erro ? codigoDoErro(erro) : "";
+  $("msgLogin").textContent = erro ? mensagemDeErro(erro) : "";
+  const temSessao = loja.modo === "real" ? !!window.Clerk?.isSignedIn : !!eu;
+  $("acoesErro").hidden = !erro;
+  $("btnSairErro").hidden = !temSessao;
+  $("btnPerfil").hidden = !(temSessao && PEDE_PERFIL.has(codigo));
+  $("btnTentar").textContent = "Tentar de novo";
+}
+
+function mostrarStatus(p) {
+  $("telaLogin").hidden = false;
+  $("formDemo").hidden = true;
+  if (window.Clerk) {
+    try { window.Clerk.unmountSignIn($("clerkSignIn")); } catch {}
+    try { window.Clerk.unmountUserProfile($("clerkSignIn")); } catch {}
+  }
+  $("textoLogin").hidden = true;
+  $("msgLogin").textContent = "";
+  $("statusAcesso").hidden = false;
+  let icone = "⏳", titulo = "Solicitação enviada", texto;
+  if (p.papel === "pendente" && p.situacao === "rejeitado") {
+    icone = "✋"; titulo = "Pedido não aprovado";
+    texto = `Olá, ${p.nome}. Um administrador não aprovou seu acesso. Se achar que foi engano, fale com alguém do grupo.`;
+  } else if (p.situacao === "suspenso") {
+    icone = "⏸"; titulo = "Acesso suspenso";
+    texto = `Olá, ${p.nome}. Seu acesso ao mural está suspenso no momento. Fale com um administrador.`;
+  } else {
+    texto = `Olá, ${p.nome}! Seu pedido para entrar no mural foi registrado. Assim que um administrador aprovar, esta página libera o acesso sozinha.`;
+  }
+  $("statusIcone").textContent = icone;
+  $("statusTitulo").textContent = titulo;
+  $("statusTexto").textContent = texto;
+  $("acoesErro").hidden = false;
+  $("btnPerfil").hidden = true;
+  $("btnSairErro").hidden = false;
+  $("btnTentar").textContent = "Verificar agora";
+}
+
+function mostrarFaixaErro(e) {
+  $("faixaErroTexto").textContent = e ? mensagemDeErro(e) : "";
+  $("faixaErro").hidden = !e;
+}
+
 /* ---------- rotas ---------- */
-const VIEWS = ["plataformas", "usuarios", "ranking", "calculadora"];
+const VIEWS = ["plataformas", "usuarios", "ranking", "calculadora", "admin"];
 function rota() {
-  const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "plataformas";
+  let v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "plataformas";
+  if (v === "admin" && eu?.papel !== "admin") v = "plataformas";
   document.querySelectorAll("[data-view]").forEach(s => s.hidden = s.id !== "v-" + v);
   document.querySelectorAll("#nav a").forEach(a => {
     if (a.getAttribute("href") === "#" + v) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
 }
-window.addEventListener("hashchange", rota);
+window.addEventListener("hashchange", () => { rota(); if (location.hash === "#admin") atualizarAdmin(); });
 
 /* ---------- render ---------- */
 function renderPlats() {
@@ -538,13 +732,146 @@ function renderRanking() {
 
 function renderTudo() { renderPlats(); renderLista(); renderUsuarios(); renderRanking(); }
 
-let carregando = false;
+/* ---------- administração ---------- */
+const ROTULO_ACAO = {
+  aprovar: "Aprovar", rejeitar: "Recusar", suspender: "Suspender", reativar: "Reativar",
+  promover_admin: "Tornar admin", remover_admin: "Remover admin",
+};
+const PEDE_CONFIRMACAO = new Set(["rejeitar", "suspender", "promover_admin", "remover_admin"]);
+const FRASE_EVENTO = {
+  solicitou: (a) => `${a} pediu acesso`,
+  aprovou: (a, p) => `${p} aprovou ${a}`,
+  rejeitou: (a, p) => `${p} recusou o pedido de ${a}`,
+  suspendeu: (a, p) => `${p} suspendeu ${a}`,
+  reativou: (a, p) => `${p} reativou ${a}`,
+  promoveu_admin: (a, p) => `${p} tornou ${a} administrador`,
+  removeu_admin: (a, p) => `${p} removeu ${a} de administrador`,
+  primeiro_admin: (a) => `${a} virou o primeiro administrador`,
+};
+
+function botoesAdmin(u, acoes) {
+  if (u.id === eu.id) return `<span class="sub">você</span>`;
+  return `<div class="acoes-admin">${acoes.map(a =>
+    `<button class="btn ${a === "aprovar" || a === "reativar" ? "" : "sec "}min" type="button" data-acao="${a}" data-alvo="${esc(u.id)}">${ROTULO_ACAO[a]}</button>`).join("")}</div>`;
+}
+
+function renderAdmin() {
+  const pend = adminUsuarios.filter(u => u.papel === "pendente" && u.situacao === "ativo");
+  const rej = adminUsuarios.filter(u => u.papel === "pendente" && u.situacao === "rejeitado");
+  const membros = adminUsuarios.filter(u => u.papel !== "pendente")
+    .sort((a, b) => (a.papel === "admin" ? 0 : 1) - (b.papel === "admin" ? 0 : 1) || a.nome.localeCompare(b.nome));
+
+  $("badgePend").textContent = pend.length;
+  $("badgePend").hidden = !pend.length;
+
+  $("tbPendentes").innerHTML = pend.length ? pend.map(u => `<tr><td><b>${esc(u.nome)}</b></td><td>${dataHora(u.criado_em)}</td>
+    <td>${botoesAdmin(u, ["aprovar", "rejeitar"])}</td></tr>`).join("")
+    : `<tr><td colspan="3" class="sub">Nenhum pedido esperando.</td></tr>`;
+
+  $("tbMembros").innerHTML = membros.map(u => {
+    const acoes = u.situacao === "suspenso" ? ["reativar"] : [];
+    if (u.situacao === "ativo") acoes.push(u.papel === "admin" ? "remover_admin" : "promover_admin", "suspender");
+    if (u.situacao === "suspenso" && u.papel === "admin") acoes.push("remover_admin");
+    return `<tr><td>${esc(u.nome)}</td>
+      <td>${u.papel === "admin" ? '<span class="tag">admin</span>' : "membro"}</td>
+      <td>${u.situacao === "suspenso" ? '<span class="tag warn">suspenso</span>' : '<span class="tag ok">ativo</span>'}</td>
+      <td>${botoesAdmin(u, acoes)}</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="sub">Sem membros.</td></tr>`;
+
+  $("painelRejeitados").hidden = !rej.length;
+  $("tbRejeitados").innerHTML = rej.map(u => `<tr><td>${esc(u.nome)}</td><td>${dataHora(u.criado_em)}</td>
+    <td>${botoesAdmin(u, ["aprovar"])}</td></tr>`).join("");
+
+  const nome = id => adminUsuarios.find(u => u.id === id)?.nome || "alguém";
+  $("listaEventos").innerHTML = adminEventos.length ? adminEventos.map(ev => {
+    const f = FRASE_EVENTO[ev.acao] || ((a) => `${ev.acao}: ${a}`);
+    return `<div class="evento"><time>${dataHora(ev.criado_em)}</time><span>${esc(f(nome(ev.alvo_id), nome(ev.por_id)))}${ev.motivo ? ` — <i>${esc(ev.motivo)}</i>` : ""}</span></div>`;
+  }).join("") : `<p class="sub">Nada por aqui ainda.</p>`;
+}
+
+async function atualizarAdmin() {
+  if (eu?.papel !== "admin") return;
+  try {
+    [adminUsuarios, adminEventos] = await Promise.all([loja.adminUsuarios(), loja.adminEventos()]);
+    renderAdmin();
+  } catch (e) { console.error(e); $("msgAdmin").className = "msg bad"; $("msgAdmin").textContent = mensagemDeErro(e); }
+}
+
+let acaoPendente = null;
+async function executarAcao(alvo, acao, motivo) {
+  const u = adminUsuarios.find(x => x.id === alvo);
+  const msg = $("msgAdmin");
+  msg.className = "msg"; msg.textContent = "Salvando…";
+  document.querySelectorAll("[data-acao]").forEach(b => b.disabled = true);
+  try {
+    const r = await loja.alterarAcesso(alvo, acao, motivo, u?.atualizado_em);
+    const feito = { aprovar: "aprovado(a)", rejeitar: "teve o pedido recusado", suspender: "suspenso(a)", reativar: "reativado(a)",
+                    promover_admin: "agora é administrador(a)", remover_admin: "não é mais administrador(a)" }[acao];
+    msg.className = "msg ok"; msg.textContent = `${r.nome} ${feito}.`;
+  } catch (e) {
+    console.error(e); msg.className = "msg bad"; msg.textContent = mensagemDeErro(e);
+  } finally {
+    await atualizarAdmin();
+  }
+}
+
+$("v-admin").addEventListener("click", e => {
+  const b = e.target.closest("[data-acao]"); if (!b) return;
+  const alvo = b.dataset.alvo, acao = b.dataset.acao;
+  const u = adminUsuarios.find(x => x.id === alvo); if (!u) return;
+  if (!PEDE_CONFIRMACAO.has(acao)) { executarAcao(alvo, acao, null); return; }
+  acaoPendente = { alvo, acao };
+  const frases = { rejeitar: `Recusar o pedido de ${u.nome}?`, suspender: `Suspender ${u.nome}? Ele(a) perde o acesso na hora.`,
+                   promover_admin: `Tornar ${u.nome} administrador? Ele(a) poderá aprovar, suspender e gerenciar outros admins.`,
+                   remover_admin: `Remover ${u.nome} de administrador? Ele(a) continua membro.` };
+  $("confirmaTexto").textContent = frases[acao];
+  $("inMotivo").value = "";
+  $("confirmaAdmin").hidden = false;
+  $("confirmaAdmin").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("inMotivo").focus();
+});
+$("btnCancelar").addEventListener("click", () => { acaoPendente = null; $("confirmaAdmin").hidden = true; });
+$("btnConfirmar").addEventListener("click", async () => {
+  if (!acaoPendente) return;
+  const { alvo, acao } = acaoPendente; acaoPendente = null;
+  $("confirmaAdmin").hidden = true;
+  await executarAcao(alvo, acao, $("inMotivo").value.trim());
+});
+
+/* ---------- ciclo de atualização ---------- */
+let carregando = false, iniciado = false;
 async function atualizar() {
   if (!eu || carregando) return;
   carregando = true;
-  try { ({ codigos, usuarios } = await loja.carregar()); renderTudo(); }
-  catch (e) { console.error(e); $("lista").innerHTML = `<div class="vazio">${esc(loja.erroAmigavel(e))}</div>`; }
-  finally { carregando = false; }
+  try {
+    const p = await loja.estadoProprio();
+    eu = { ...eu, ...p };
+    $("euNome").textContent = eu.nome;
+    $("navAdmin").hidden = eu.papel !== "admin" || !eu.acesso;
+    if (!eu.acesso) { mostrarStatus(eu); return; }
+    $("telaLogin").hidden = true;
+    rota();
+    ({ codigos, usuarios } = await loja.carregar());
+    renderTudo();
+    mostrarFaixaErro(null);
+    if (eu.papel === "admin") await atualizarAdmin();
+  } catch (e) {
+    console.error(e);
+    if (codigoDoErro(e) === "nao_logado") { mostrarLogin({ texto: "Sua sessão terminou.", erro: e }); return; }
+    mostrarFaixaErro(e);
+  } finally { carregando = false; }
+}
+
+function aoEntrar(perfil) {
+  eu = { ...perfil, acesso: temAcesso(perfil) };
+  $("euNome").textContent = eu.nome;
+  if (!iniciado) {
+    iniciado = true;
+    setInterval(() => { if (!document.hidden) atualizar(); }, ATUALIZAR_A_CADA_MS);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); });
+    setInterval(() => { if (eu?.acesso) { renderPlats(); renderLista(); } }, 30000);
+  }
+  atualizar();
 }
 
 /* ---------- calculadora ---------- */
@@ -560,7 +887,7 @@ $("cQtd").addEventListener("input", calcular);
 $("cPreco").addEventListener("input", calcular);
 document.querySelectorAll("[data-preco]").forEach(b => b.addEventListener("click", () => { $("cPreco").value = b.dataset.preco; calcular(); }));
 
-/* ---------- ações ---------- */
+/* ---------- ações de códigos (lógica de cópia revisada na próxima etapa) ---------- */
 const extrairCodigos = t => [...new Set(t.replace(/[{}]/g, " ").split(/[\s,;]+/).filter(Boolean))];
 
 $("plats").addEventListener("click", e => {
@@ -575,7 +902,7 @@ $("btnPostar").addEventListener("click", async () => {
   const todos = extrairCodigos($("inCodigos").value);
   const validos = todos.filter(codigoValido), invalidos = todos.filter(c => !codigoValido(c));
   if (!validos.length) { msg.className = "msg bad"; msg.textContent = "Cole pelo menos um código (letras, números, - ou _)."; return; }
-  if (validos.length > 200) { msg.className = "msg bad"; msg.textContent = "Máximo de 200 códigos por vez."; return; }
+  if (validos.length > 200) { msg.className = "msg bad"; msg.textContent = MENSAGENS.maximo_200_por_vez; return; }
   $("btnPostar").disabled = true; msg.textContent = `Postando ${validos.length}...`;
   try {
     const r = await loja.postar(plataforma, validos);
@@ -586,7 +913,7 @@ $("btnPostar").addEventListener("click", async () => {
     $("inCodigos").value = "";
     await atualizar();
   } catch (err) {
-    console.error(err); msg.className = "msg bad"; msg.textContent = loja.erroAmigavel(err);
+    console.error(err); msg.className = "msg bad"; msg.textContent = mensagemDeErro(err);
   } finally { $("btnPostar").disabled = false; }
 });
 
@@ -594,14 +921,14 @@ $("lista").addEventListener("click", async e => {
   const bc = e.target.closest("[data-copiar]"), ba = e.target.closest("[data-apagar]");
   if (bc) {
     const c = codigos.find(x => String(x.id) === bc.dataset.copiar); if (!c) return;
-    const ok = await copiarTexto(c.codigo);   // copia antes de falar com o servidor (precisa do clique)
+    const ok = await copiarTexto(c.codigo);
     bc.textContent = ok ? "Copiado" : "Selecione";
     setTimeout(() => { bc.textContent = "Copiar"; }, 1500);
-    try { await loja.pegar(c.id); await atualizar(); } catch (err) { console.error(err); }
+    try { await loja.pegar(c.id); await atualizar(); } catch (err) { console.error(err); mostrarFaixaErro(err); }
   }
   if (ba) {
     if (ba.dataset.confirma !== "1") { ba.dataset.confirma = "1"; ba.textContent = "Apagar?"; setTimeout(() => { ba.dataset.confirma = ""; ba.textContent = "✕"; }, 2500); return; }
-    try { await loja.apagar(Number(ba.dataset.apagar)); await atualizar(); } catch (err) { console.error(err); }
+    try { await loja.apagar(Number(ba.dataset.apagar)); await atualizar(); } catch (err) { console.error(err); mostrarFaixaErro(err); }
   }
 });
 
@@ -627,21 +954,16 @@ $("btnLote").addEventListener("click", async () => {
   await atualizar();
 });
 
+/* ---------- botões gerais ---------- */
 $("btnSair").addEventListener("click", () => loja.sair());
-
-/* ---------- início ---------- */
-$("avisoDemo").hidden = loja.modo !== "demo";
-rota(); calcular();
-
-function mostrarLogin(texto, erro = "", semUsername = false) {
-  $("telaLogin").hidden = false;
-  if (texto) $("textoLogin").textContent = texto;
-  $("msgLogin").textContent = erro;
-  const temSessao = loja.modo === "real" && window.Clerk?.isSignedIn;
-  $("acoesErro").hidden = !(erro && temSessao);
-  $("btnPerfil").hidden = !semUsername;
-}
-// perfil do Clerk embutido na própria tela (o popup ficava atrás da tela de login)
+$("btnSairErro").addEventListener("click", () => loja.sair());
+$("btnFaixaTentar").addEventListener("click", () => atualizar());
+$("btnTentar").addEventListener("click", () => {
+  // na tela de status, só verifica de novo; nos erros de login, recarrega
+  if (!$("statusAcesso").hidden && eu) { $("btnTentar").textContent = "Verificando…"; atualizar().finally(() => { $("btnTentar").textContent = "Verificar agora"; }); }
+  else location.reload();
+});
+// perfil do Clerk embutido na tela (o popup ficava atrás da tela de login)
 $("btnPerfil").addEventListener("click", () => {
   const alvo = $("clerkSignIn");
   try { window.Clerk.unmountSignIn(alvo); } catch {}
@@ -652,18 +974,17 @@ $("btnPerfil").addEventListener("click", () => {
   $("msgLogin").textContent = "Em “Username”, defina seu nome de usuário e salve. Depois clique em “Já defini, entrar”.";
   alvo.scrollIntoView({ behavior: "smooth", block: "start" });
 });
-$("btnSairErro").addEventListener("click", () => loja.sair());
-$("btnTentar").addEventListener("click", () => location.reload());
 
-loja.iniciar(usuario => {
-  eu = usuario;
-  $("euNome").textContent = eu.nome;
-  $("telaLogin").hidden = true;
-  atualizar();
-  setInterval(() => { if (!document.hidden) atualizar(); }, ATUALIZAR_A_CADA_MS);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); });
-  setInterval(() => { renderPlats(); renderLista(); }, 30000);   // "vence em" e tira os vencidos
-}, mostrarLogin).catch(e => { console.error(e); mostrarLogin("Não foi possível entrar.", loja.erroAmigavel(e), !!e.semUsername); });
+/* ---------- início ---------- */
+$("avisoDemo").hidden = loja.modo !== "demo";
+rota(); calcular();
+
+if (CONFIG_INCOMPLETA) {
+  mostrarLogin({ texto: "Configuração incompleta.", erro: erroCom("config_incompleta") });
+} else {
+  loja.iniciar(aoEntrar, mostrarLogin)
+    .catch(e => { console.error(e); mostrarLogin({ texto: "Não foi possível entrar.", erro: e }); });
+}
 </script>
 </body>
 </html>
