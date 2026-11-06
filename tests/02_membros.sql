@@ -29,7 +29,7 @@ reset role;
 -- ---------- 3. Pendente: não vê nem faz nada de membro ----------
 set role authenticated;
 select teste.como('u_pedro', 'pedro');
-select teste.ok((public.entrar() ->> 'papel') = 'pendente' and (public.entrar() ->> 'acesso')::boolean = false, 'entrar() informa pendente sem acesso');
+select teste.ok((public.entrar_v2() ->> 'papel') = 'pendente' and (public.entrar_v2() ->> 'acesso')::boolean = false, 'entrar() informa pendente sem acesso');
 select teste.ok(teste.contar('select * from public.codigos') = 0,        'pendente não lê codigos');
 select teste.ok(teste.contar('select * from public.copias') = 0,         'pendente não lê copias');
 select teste.ok(teste.contar('select * from public.codigos_ativos') = 0, 'pendente não lê codigos_ativos');
@@ -44,10 +44,31 @@ select teste.erro($$update public.usuarios set papel = 'admin' where id = 'u_ped
 select teste.erro($$insert into public.eventos_acesso (alvo_id, acao) values ('u_pedro','aprovou')$$, 'permission denied', 'pendente não grava auditoria');
 reset role;
 
+-- ---------- 3b. Compatibilidade com o site atual (main) ----------
+set role authenticated;
+select teste.como('u_pedro', 'pedro');
+select teste.ok(public.entrar() = 'pedro', 'entrar() antigo continua devolvendo texto');
+select teste.como('u_compat', 'compat');
+select teste.ok(public.entrar() = 'compat', 'entrar() antigo cria conta nova');
+reset role;
+select teste.ok((select papel from public.usuarios where id = 'u_compat') = 'pendente', 'conta criada pelo site antigo também fica pendente');
+select teste.ok(exists (select 1 from public.eventos_acesso where alvo_id = 'u_compat' and acao = 'solicitou'), 'site antigo também registra o pedido');
+delete from public.eventos_acesso where alvo_id = 'u_compat';
+delete from public.usuarios where id = 'u_compat';
+
+-- ---------- 3c. Funções e tabelas internas fora do alcance do site ----------
+set role authenticated;
+select teste.como('u_pedro', 'pedro');
+select teste.erro($$select public.registrar_entrada()$$, 'permission denied', 'registrar_entrada() é interna');
+select teste.erro($$select public.recuperacao_promover_admin('pedro', 'tentativa')$$, 'permission denied', 'site não chama recuperacao_promover_admin');
+select teste.erro($$select * from public.migracoes$$, 'permission denied', 'site não lê migracoes');
+reset role;
+select teste.ok((select aplicacoes from public.migracoes where versao = '001_membros') >= 1, 'migração registrada');
+
 -- ---------- 4. Conta nova pelo Clerk: vira pendente sozinha ----------
 set role authenticated;
 select teste.como('u_novo', 'novato');
-select teste.ok((public.entrar() ->> 'papel') = 'pendente', 'conta nova entra como pendente');
+select teste.ok((public.entrar_v2() ->> 'papel') = 'pendente', 'conta nova entra como pendente');
 reset role;
 select teste.ok(exists (select 1 from public.eventos_acesso where alvo_id = 'u_novo' and acao = 'solicitou'), 'solicitação registrada na auditoria');
 
@@ -71,7 +92,7 @@ reset role;
 -- ---------- 6. Admin aprova, rejeita, suspende, reativa ----------
 set role authenticated;
 select teste.como('u_anderson', 'anderson');
-select teste.ok((public.entrar() ->> 'papel') = 'admin', 'anderson é admin');
+select teste.ok((public.entrar_v2() ->> 'papel') = 'admin', 'anderson é admin');
 select teste.ok(teste.contar('select * from public.usuarios') = 4, 'admin vê todos os usuários, inclusive pendentes');
 select teste.ok((public.admin_alterar_acesso('u_pedro', 'aprovar') ->> 'papel') = 'membro', 'admin aprova pedro');
 select teste.ok((public.admin_alterar_acesso('u_luis',  'aprovar') ->> 'papel') = 'membro', 'admin aprova luis');
@@ -86,14 +107,14 @@ reset role;
 -- rejeitado continua sem acesso, e pode ser aprovado depois
 set role authenticated;
 select teste.como('u_novo', 'novato');
-select teste.ok((public.entrar() ->> 'situacao') = 'rejeitado', 'rejeitado vê o próprio estado');
+select teste.ok((public.entrar_v2() ->> 'situacao') = 'rejeitado', 'rejeitado vê o próprio estado');
 select teste.ok(teste.contar('select * from public.codigos') = 0, 'rejeitado não lê codigos');
 reset role;
 
 -- ---------- 7. Membro: vê os dados, mas não administra ----------
 set role authenticated;
 select teste.como('u_pedro', 'pedro');
-select teste.ok((public.entrar() ->> 'acesso')::boolean, 'pedro agora tem acesso');
+select teste.ok((public.entrar_v2() ->> 'acesso')::boolean, 'pedro agora tem acesso');
 select teste.ok(teste.contar('select * from public.codigos') = 3, 'membro lê codigos (histórico preservado)');
 select teste.ok(teste.contar('select * from public.ranking') = 3, 'ranking só com membros ativos (anderson, pedro, luis)');
 select teste.ok(teste.contar('select * from public.usuarios') = 3, 'membro não vê pendentes nem rejeitados');
@@ -140,6 +161,13 @@ select teste.ok(not public.copiar_codigo((select id from public.codigos where co
 select teste.como('u_pedro', 'pedro');
 select teste.ok(not public.copiar_codigo((select id from public.codigos where codigo = 'NOVO1')), 'autor não copia o próprio');
 reset role;
+
+-- ---------- 10b. Recuperação de admin (SQL Editor) ----------
+select teste.erro($$select public.recuperacao_promover_admin('luis', '')$$, 'motivo', 'recuperação exige motivo');
+select public.recuperacao_promover_admin('luis', 'teste de recuperação');
+select teste.ok((select papel from public.usuarios where id = 'u_luis') = 'admin', 'recuperação promove mesmo havendo admins');
+select teste.ok(exists (select 1 from public.eventos_acesso where alvo_id = 'u_luis' and acao = 'recuperacao_admin' and motivo is not null), 'recuperação auditada com motivo');
+update public.usuarios set papel = 'membro' where id = 'u_luis';
 
 -- ---------- 11. Versão esperada: não sobrescreve decisão de outro admin ----------
 insert into public.usuarios (id, nome) values ('u_versao', 'versao');

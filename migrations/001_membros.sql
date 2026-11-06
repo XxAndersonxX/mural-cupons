@@ -8,19 +8,40 @@
 --   * eh_membro() / eh_admin(): quem pode ver e fazer o quê
 --   * políticas de leitura passam a exigir membro ativo
 --   * views só devolvem dados para membros ativos
---   * entrar() passa a devolver {nome, papel, situacao, acesso}
+--   * entrar_v2() (NOVA) devolve {nome, papel, situacao, acesso} — usada pelo site novo
+--   * entrar() continua devolvendo TEXTO (compatível com o site atual da main);
+--     só passa a registrar a conta como pendente. Será removida numa migração futura.
 --   * admin_alterar_acesso(): aprovar, rejeitar, suspender, reativar,
 --     promover_admin, remover_admin — só administradores, com auditoria
 --   * definir_primeiro_admin(): uso ÚNICO no SQL Editor, só funciona
 --     enquanto não existir nenhum administrador
+--   * recuperacao_promover_admin(): emergência, só no SQL Editor (docs/IMPLANTACAO.md)
+--   * tabela migracoes: registra primeira aplicação / reaplicações
 --   * postar/copiar/apagar exigem membro ativo
 --   * funções security definer com search_path vazio (endurecimento)
 --
--- Como aplicar: Supabase → SQL Editor → colar este arquivo → Run.
--- Depois, UMA vez:  select public.definir_primeiro_admin('SEU_USERNAME');
+-- Como aplicar: siga docs/IMPLANTACAO.md (ordem, verificação e recuperação).
 -- Reverter: migrations/001_membros_down.sql
 -- =====================================================================
 begin;
+
+-- ---------------------------------------------------------------------
+-- 0. Controle de migrações (fora da API: sem grants para anon/authenticated)
+-- ---------------------------------------------------------------------
+create table if not exists public.migracoes (
+  versao              text primary key,
+  primeira_aplicacao  timestamptz not null default now(),
+  ultima_aplicacao    timestamptz not null default now(),
+  aplicacoes          int not null default 1,
+  revertida_em        timestamptz
+);
+alter table public.migracoes enable row level security;
+revoke all on public.migracoes from anon, authenticated;
+
+-- guarda se a coluna "papel" já existia ANTES desta execução
+create temporary table _m001 on commit drop as
+select exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'usuarios' and column_name = 'papel') as papel_existia;
 
 -- ---------------------------------------------------------------------
 -- 1. Colunas novas em usuarios (aditivo)
@@ -52,8 +73,7 @@ create index if not exists usuarios_papel_situacao on public.usuarios (papel, si
 create table if not exists public.eventos_acesso (
   id              bigint generated always as identity primary key,
   alvo_id         text not null references public.usuarios(id),
-  acao            text not null check (acao in ('solicitou', 'aprovou', 'rejeitou', 'suspendeu', 'reativou',
-                                                'promoveu_admin', 'removeu_admin', 'primeiro_admin')),
+  acao            text not null,
   por_id          text references public.usuarios(id),          -- null = sistema / SQL Editor
   motivo          text check (motivo is null or char_length(motivo) <= 300),
   papel_antes     text,
@@ -63,6 +83,10 @@ create table if not exists public.eventos_acesso (
   criado_em       timestamptz not null default now()
 );
 create index if not exists eventos_acesso_data on public.eventos_acesso (criado_em desc);
+alter table public.eventos_acesso drop constraint if exists eventos_acesso_acao_check;
+alter table public.eventos_acesso add  constraint eventos_acesso_acao_check
+  check (acao in ('solicitou', 'aprovou', 'rejeitou', 'suspendeu', 'reativou',
+                  'promoveu_admin', 'removeu_admin', 'primeiro_admin', 'recuperacao_admin'));
 alter table public.eventos_acesso enable row level security;
 revoke all on public.eventos_acesso from anon, authenticated;
 
@@ -141,12 +165,11 @@ where (select public.eh_membro())
   and u.papel in ('membro', 'admin') and u.situacao = 'ativo';
 
 -- ---------------------------------------------------------------------
--- 6. entrar(): cria a solicitação e devolve o estado do acesso
---    (o tipo de retorno muda de text para json, por isso o drop)
+-- 6. Entrada: registrar_entrada() faz o trabalho; entrar() (texto, compatível
+--    com o site atual) e entrar_v2() (json, site novo) só formatam a resposta
 -- ---------------------------------------------------------------------
-drop function if exists public.entrar();
-create function public.entrar()
-returns json language plpgsql security definer set search_path = '' as $$
+create or replace function public.registrar_entrada()
+returns public.usuarios language plpgsql security definer set search_path = '' as $$
 declare
   v_id   text := auth.jwt() ->> 'sub';
   v_nome text := auth.jwt() ->> 'username';
@@ -173,7 +196,21 @@ begin
     insert into public.eventos_acesso (alvo_id, acao, papel_depois, situacao_depois)
     values (v_id, 'solicitou', v_u.papel, v_u.situacao);
   end if;
+  return v_u;
+end $$;
 
+-- compatível com o site antigo: mesmo nome, mesmo retorno (texto)
+create or replace function public.entrar()
+returns text language plpgsql security definer set search_path = '' as $$
+begin
+  return (public.registrar_entrada()).nome;
+end $$;
+
+create or replace function public.entrar_v2()
+returns json language plpgsql security definer set search_path = '' as $$
+declare v_u public.usuarios%rowtype;
+begin
+  v_u := public.registrar_entrada();
   return json_build_object(
     'id', v_u.id, 'nome', v_u.nome, 'papel', v_u.papel, 'situacao', v_u.situacao,
     'acesso', v_u.papel in ('membro', 'admin') and v_u.situacao = 'ativo');
@@ -264,6 +301,24 @@ begin
   return v_u.nome || ' agora é administrador';
 end $$;
 
+-- Emergência (só SQL Editor): devolve o papel de admin a alguém mesmo que já
+-- existam admins — por exemplo, se o único admin trocou de conta no Clerk.
+create or replace function public.recuperacao_promover_admin(p_nome text, p_motivo text)
+returns text language plpgsql security definer set search_path = '' as $$
+declare v_u public.usuarios%rowtype;
+begin
+  if p_motivo is null or char_length(trim(p_motivo)) < 5 then
+    raise exception 'informe um motivo (mínimo 5 caracteres) para a auditoria';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('mural:admin_alterar_acesso'));
+  select * into v_u from public.usuarios where nome = p_nome for update;
+  if not found then raise exception 'usuario_inexistente: entre no site uma vez com esse usuário antes'; end if;
+  update public.usuarios set papel = 'admin', situacao = 'ativo', atualizado_em = now() where id = v_u.id;
+  insert into public.eventos_acesso (alvo_id, acao, motivo, papel_antes, situacao_antes, papel_depois, situacao_depois)
+  values (v_u.id, 'recuperacao_admin', left(trim(p_motivo), 300), v_u.papel, v_u.situacao, 'admin', 'ativo');
+  return v_u.nome || ' recuperou o papel de administrador';
+end $$;
+
 -- ---------------------------------------------------------------------
 -- 8. Operações de membro: mesmas regras de antes + exigência de membro ativo
 --    (mesmos parâmetros e retornos; só endurecidas)
@@ -317,17 +372,55 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 9. Permissões
+-- 9a. Privilégios de tabelas e views: o Supabase concede "all" por padrão a
+--     anon/authenticated em objetos novos (inclui INSERT/UPDATE/DELETE nas
+--     views e TRUNCATE/REFERENCES/TRIGGER nas tabelas). Deixa só a leitura.
 -- ---------------------------------------------------------------------
-revoke all on function public.eh_membro(), public.eh_admin(), public.entrar(),
+revoke all on public.usuarios, public.codigos, public.copias, public.eventos_acesso,
+              public.codigos_ativos, public.ranking, public.migracoes
+  from anon, authenticated;
+grant select on public.usuarios, public.codigos, public.copias, public.eventos_acesso,
+                public.codigos_ativos, public.ranking
+  to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 9b. Permissões de funções
+-- ---------------------------------------------------------------------
+revoke all on function public.eh_membro(), public.eh_admin(), public.entrar(), public.entrar_v2(),
+  public.registrar_entrada(), public.recuperacao_promover_admin(text, text),
   public.admin_alterar_acesso(text, text, text, timestamptz), public.definir_primeiro_admin(text),
   public.postar_codigos(text, text[]), public.copiar_codigo(bigint), public.apagar_codigo(bigint)
   from public, anon, authenticated;
 
-grant execute on function public.eh_membro(), public.eh_admin(), public.entrar(),
+grant execute on function public.eh_membro(), public.eh_admin(), public.entrar(), public.entrar_v2(),
   public.admin_alterar_acesso(text, text, text, timestamptz),
   public.postar_codigos(text, text[]), public.copiar_codigo(bigint), public.apagar_codigo(bigint)
   to authenticated;
--- definir_primeiro_admin: sem grant de propósito (só o dono do banco, no SQL Editor)
+-- sem grant de propósito (só o dono do banco, no SQL Editor):
+--   definir_primeiro_admin, recuperacao_promover_admin, registrar_entrada (interna)
+
+-- ---------------------------------------------------------------------
+-- 10. Registro e resumo: primeira aplicação x reaplicação
+-- ---------------------------------------------------------------------
+insert into public.migracoes (versao) values ('001_membros')
+on conflict (versao) do update
+  set ultima_aplicacao = now(), aplicacoes = public.migracoes.aplicacoes + 1, revertida_em = null;
+
+do $$
+declare
+  v_existia boolean := (select papel_existia from _m001);
+  v_adm int := (select count(*) from public.usuarios where papel = 'admin' and situacao = 'ativo');
+  v_mem int := (select count(*) from public.usuarios where papel = 'membro');
+  v_pen int := (select count(*) from public.usuarios where papel = 'pendente');
+begin
+  if not v_existia then
+    raise notice 'PRIMEIRA APLICAÇÃO: % usuário(s) existente(s) ficaram PENDENTES. Próximo passo: entrar no site e rodar definir_primeiro_admin (docs/IMPLANTACAO.md).', v_pen;
+  else
+    raise notice 'REAPLICAÇÃO: papéis mantidos — % admin(s) ativo(s), % membro(s), % pendente(s).', v_adm, v_mem, v_pen;
+  end if;
+  if v_adm = 0 then
+    raise notice 'ATENÇÃO: nenhum admin ativo. Rode select public.definir_primeiro_admin(''SEU_USERNAME'');';
+  end if;
+end $$;
 
 commit;

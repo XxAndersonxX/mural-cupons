@@ -16,7 +16,9 @@ Arquivos:
 | `index.html` | O site inteiro |
 | `supabase.sql` | Cria o banco e as regras (rodar 1 vez no Supabase) |
 | `migrations/` | Mudanças do banco, em ordem (`001_membros.sql`…), cada uma com seu `_down.sql` para reverter |
-| `tests/` | Testes de segurança e concorrência (rodam num Postgres local, nunca no Supabase) |
+| `docs/IMPLANTACAO.md` | **Como aplicar uma migração**: ordem, verificação, primeira aplicação x reaplicação e recuperação |
+| `tests/` | Testes de segurança, permissões (SQL e API), concorrência e reversão — rodam num Postgres local, nunca no Supabase |
+| `tests/verificar_supabase_anon.sh` | Verificação **só de leitura** no Supabase real: visitante anônimo não acessa nada |
 | `README.md` | Este passo a passo |
 
 Com as **três chaves vazias** no `index.html`, o site roda em **modo demonstração**: login só com nome e dados só no seu navegador. Com as chaves preenchidas, ele **nunca** cai no modo demonstração: se o Clerk ou o Supabase não carregarem, aparece uma mensagem de erro.
@@ -27,7 +29,7 @@ Com as **três chaves vazias** no `index.html`, o site roda em **modo demonstra�
 
 1. Crie uma conta em <https://supabase.com> e clique em **New project**. Região: **South America (São Paulo)**. Guarde a senha do banco, mas o site não usa ela.
 2. Abra **SQL Editor** → **New query**, cole todo o conteúdo de `supabase.sql` e clique em **Run**. Deve aparecer "Success".
-   Depois rode, na ordem, cada arquivo de `migrations/` que **não** termina em `_down.sql` (hoje: `001_membros.sql`).
+   Depois aplique as migrações de `migrations/` seguindo **[docs/IMPLANTACAO.md](docs/IMPLANTACAO.md)** (hoje: `001_membros.sql`).
 3. Vá em **Project Settings → API** (ou **Data API / API Keys**) e copie:
    - **Project URL** (ex.: `https://abcd1234.supabase.co`)
    - a chave **publishable** (ou **anon public**). **Nunca** use a `service_role` / `secret` no site.
@@ -121,20 +123,16 @@ Para adicionar ou trocar plataformas, altere a lista nos **dois** lugares:
 - Se dois admins mexerem no mesmo usuário ao mesmo tempo, a segunda ação é recusada e a lista é atualizada.
 - Toda ação de admin fica no **Histórico** com quem fez, quando e o motivo.
 
-**Primeiro administrador (uma vez só):** depois de rodar a migração 001, entre no site com a sua conta (vai aparecer "Solicitação enviada") e rode no SQL Editor:
-
-```sql
-select public.definir_primeiro_admin('SEU_USERNAME');
-```
-
-Essa função só funciona enquanto não existir nenhum admin e não pode ser chamada pelo site. Os próximos admins são promovidos pela própria aba Admin.
+**Primeiro administrador (uma vez só):** depois de rodar a migração 001, entre no site com a sua conta e rode no SQL Editor `select public.definir_primeiro_admin('SEU_USERNAME');`. Essa função só funciona enquanto não existir nenhum admin e não pode ser chamada pelo site. Os próximos admins são promovidos pela própria aba Admin. Passo a passo completo e recuperação em **[docs/IMPLANTACAO.md](docs/IMPLANTACAO.md)**.
 
 ## Testes (para quem mexer no banco)
 
 Num Postgres local descartável (nunca no Supabase):
 
 ```bash
-PSQL_BASE="psql -h localhost -p 5432 -U postgres" tests/rodar_local.sh
+PSQL_BASE="psql -h 127.0.0.1 -p 5432 -U postgres" tests/rodar_local.sh
+# com testes pela API (precisa do binário do PostgREST):
+PSQL_BASE="psql -h 127.0.0.1 -p 5432 -U postgres" PG_HOST=127.0.0.1 PG_PORT=5432 POSTGREST=/caminho/postgrest tests/rodar_local.sh
 ```
 
-Roda o banco original com dados, aplica a migração, os testes de segurança e de concorrência, reverte e reaplica.
+Roda o banco original com dados, aplica a migração (primeira vez), testes de segurança, permissões e concorrência, reaplica, reverte, reaplica de novo e, opcionalmente, testa tudo pela API. Qualquer erro interrompe a bateria; a mensagem `BATERIA COMPLETA OK` só aparece se todas as etapas passarem.

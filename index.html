@@ -333,7 +333,7 @@ const CODIGOS_CONHECIDOS = [
   "config_incompleta", "supabase_indisponivel", "clerk_indisponivel", "conta_sem_username",
   "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
   "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
-  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez",
+  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado",
 ];
 const MENSAGENS = {
   config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
@@ -353,6 +353,7 @@ const MENSAGENS = {
   motivo_longo: "O motivo pode ter no máximo 300 caracteres.",
   usuario_inexistente: "Esse usuário não existe mais. A lista foi atualizada.",
   maximo_200_por_vez: "Máximo de 200 códigos por vez.",
+  banco_desatualizado: "O site foi atualizado, mas o banco de dados ainda não. Avise um administrador (docs/IMPLANTACAO.md) e tente de novo em alguns minutos.",
   jwt_recusado: "O banco recusou o login. Saia e entre de novo; se continuar, confira a integração Clerk ↔ Supabase (README).",
   sem_conexao: "Sem conexão com o servidor. Verifique a internet e tente de novo.",
 };
@@ -363,6 +364,9 @@ function codigoDoErro(e) {
   const m = String((e && (e.message || e.details || e.hint)) || e || "");
   const c = CODIGOS_CONHECIDOS.find(k => m.includes(k));
   if (c) return c;
+  // função/coluna nova ainda não existe no banco (site atualizado antes da migração)
+  if ((e && e.code === "PGRST202") || /Could not find the function public\.(entrar_v2|admin_alterar_acesso)/.test(m)) return "banco_desatualizado";
+  if (/(papel|situacao|eventos_acesso)/.test(m) && /does not exist|Could not find/.test(m)) return "banco_desatualizado";
   if (/JWT|PGRST301|401/.test(m)) return "jwt_recusado";
   if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return "sem_conexao";
   return "desconhecido";
@@ -422,12 +426,12 @@ function criarLojaReal() {
         if (!window.Clerk.user.username) throw erroCom("conta_sem_username");
         let perfil;
         try {
-          perfil = await rpc("entrar");
+          perfil = await rpc("entrar_v2");
         } catch (e) {
           if (codigoDoErro(e) !== "sem_username_no_token") throw e;
           // token em cache de antes do username existir: pede um novo e tenta uma vez
           await window.Clerk.session.getToken({ skipCache: true });
-          perfil = await rpc("entrar");
+          perfil = await rpc("entrar_v2");
         }
         aoEntrar(perfil);
       };

@@ -44,7 +44,10 @@ from public.usuarios u;
 -- funções originais
 drop function if exists public.admin_alterar_acesso(text, text, text, timestamptz);
 drop function if exists public.definir_primeiro_admin(text);
+drop function if exists public.recuperacao_promover_admin(text, text);
+drop function if exists public.entrar_v2();
 drop function if exists public.entrar();
+drop function if exists public.registrar_entrada();
 create function public.entrar()
 returns text language plpgsql security definer set search_path = public as $$
 declare
@@ -113,6 +116,8 @@ revoke all on function public.entrar(), public.postar_codigos(text, text[]),
 grant execute on function public.entrar(), public.postar_codigos(text, text[]),
   public.copiar_codigo(bigint), public.apagar_codigo(bigint) to authenticated;
 
+update public.migracoes set revertida_em = now() where versao = '001_membros';
+
 commit;
 
 -- ---------------------------------------------------------------------
@@ -120,6 +125,7 @@ commit;
 -- ---------------------------------------------------------------------
 -- begin;
 -- drop table if exists public.eventos_acesso;
+-- (depois disso, reaplicar a 001 conta como PRIMEIRA APLICAÇÃO: todos voltam a pendente)
 -- alter table public.usuarios drop constraint if exists usuarios_papel_situacao_check;
 -- alter table public.usuarios drop constraint if exists usuarios_situacao_check;
 -- alter table public.usuarios drop constraint if exists usuarios_papel_check;
