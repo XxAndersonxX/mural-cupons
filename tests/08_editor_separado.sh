@@ -3,7 +3,7 @@
 # transação separadas (nada de sessão, tabela temporária ou BEGIN/COMMIT
 # atravessa de um comando para o outro).
 #
-# Verifica, para a migração 002:
+# Verifica, para as migrações 002 e 003:
 #   1. aplicada comando a comando: sem erros, mensagem de PRIMEIRA aplicação,
 #      funções e privilégios corretos (tests/04_permissoes.sql) e regras ok
 #   2. reaplicada comando a comando e pelo arquivo inteiro: mensagem de
@@ -105,5 +105,66 @@ por_comando migrations/002_copias_ranking.sql >/dev/null
 exige "   reaplicada após o down: $(sed 's/.*NOTICE:  //' "$TMP/notices")" grep -q "REAPLICADA" "$TMP/notices"
 $P -f tests/04_permissoes.sql > "$TMP/perm" 2>&1 || { cat "$TMP/perm"; exit 1; }
 ok "   $(tail -n 1 "$TMP/perm")"
+
+# ===================== migração 003 =====================
+cfg() { $P -c "select array_to_string(proconfig, ',') from pg_proc where proname = 'pegar_lote'"; }
+total3=$(python3 -I tests/separar_sql.py migrations/003_distribuicao_hibrida.sql | tr -cd '\0' | wc -c); total3=$((total3 + 1))
+echo "== 003 tem $total3 comandos; cada um roda numa conexão separada"
+
+# 5. primeira aplicação
+n=$(por_comando migrations/003_distribuicao_hibrida.sql | tail -n 1)
+[ "$n" = "$total3" ] || { echo "executou $n de $total3"; exit 1; }
+grep -q "MIGRAÇÃO 003 APLICADA" "$TMP/notices" || { echo "faltou a mensagem de primeira aplicação da 003"; cat "$TMP/notices"; exit 1; }
+ok "5. 003 aplicada comando a comando ($total3 conexões): $(sed 's/.*NOTICE:  //' "$TMP/notices")"
+exige "   pegar_lote da 003 (lock_timeout=5s)" [ "$(cfg)" = 'search_path="",lock_timeout=5s' ]
+$P -f tests/04_permissoes.sql > "$TMP/perm" 2>&1 || { cat "$TMP/perm"; exit 1; }
+ok "   $(tail -n 1 "$TMP/perm")"
+$P >/dev/null <<'SQL'
+insert into public.usuarios (id, nome, papel) values ('ed_c', 'edc', 'membro') on conflict do nothing;
+delete from public.codigos where plataforma = 'BRA365';
+insert into public.codigos (plataforma, codigo, autor_id, criado_em) values
+  ('BRA365', 'EA1', 'ed_a', now() - interval '3 hours'), ('BRA365', 'EA2', 'ed_a', now() - interval '2 hours'),
+  ('BRA365', 'EA3', 'ed_a', now() - interval '1 hour'),  ('BRA365', 'EC1', 'ed_c', now() - interval '30 minutes');
+select teste.como('ed_b', 'edb'); set role authenticated;
+select teste.ok((select string_agg(x ->> 'codigo', ',') from json_array_elements(public.pegar_lote('BRA365', 2) -> 'codigos') x) = 'EA1,EC1',
+                'lote híbrido após aplicação separada: 1 de cada autor');
+SQL
+ok "   lote híbrido funcionando (EA1,EC1)"
+
+# 6. reaplicação: comando a comando e arquivo inteiro
+por_comando migrations/003_distribuicao_hibrida.sql >/dev/null
+grep -q "MIGRAÇÃO 003 REAPLICADA (execução nº 2)" "$TMP/notices" || { echo "esperava 003 REAPLICADA nº 2"; cat "$TMP/notices"; exit 1; }
+ok "6. 003 reaplicada comando a comando: $(sed 's/.*NOTICE:  //' "$TMP/notices")"
+$P -f migrations/003_distribuicao_hibrida.sql > /dev/null 2> "$TMP/err"
+grep -q "REAPLICADA (execução nº 3)" "$TMP/err" || { echo "esperava 003 REAPLICADA nº 3"; cat "$TMP/err"; exit 1; }
+ok "   reaplicada pelo arquivo inteiro: execução nº 3"
+
+# 7. interrupção no meio + nova execução completa
+por_comando migrations/003_distribuicao_hibrida_down.sql >/dev/null
+$P -c "delete from public.migracoes where versao = '003_distribuicao_hibrida'" >/dev/null
+for corte in $(seq 1 $((total3 - 2))); do   # o último corte útil para antes da mensagem final
+  por_comando migrations/003_distribuicao_hibrida_down.sql >/dev/null
+  $P -c "delete from public.migracoes where versao = '003_distribuicao_hibrida'" >/dev/null
+  por_comando migrations/003_distribuicao_hibrida.sql "$corte" >/dev/null
+  [ ! -s "$TMP/notices" ] || { echo "interrompida em $corte mas mostrou mensagem final"; exit 1; }
+  [ "$($P -c "select count(*) from public.migracoes where versao='003_distribuicao_hibrida'")" = 0 ] || \
+    { [ "$corte" -ge $((total3 - 2)) ] || { echo "registro apareceu antes do fim (corte $corte)"; exit 1; }; }
+  $P -c "select has_function_privilege('authenticated', 'public.pegar_lote(text,int)', 'execute')" | grep -q t || \
+    { echo "authenticated perdeu acesso à pegar_lote no corte $corte"; exit 1; }
+  por_comando migrations/003_distribuicao_hibrida.sql >/dev/null
+  grep -q "MIGRAÇÃO 003" "$TMP/notices" || { echo "nova execução após corte $corte não terminou"; exit 1; }
+  [ "$(cfg)" = 'search_path="",lock_timeout=5s' ] || { echo "corte $corte: pegar_lote errada no fim"; exit 1; }
+done
+ok "7. 003 interrompida em cada ponto antes da mensagem final (1 a $((total3 - 2))) + nova execução: termina certa; o lote nunca fica sem permissão"
+$P -f tests/04_permissoes.sql > "$TMP/perm" 2>&1 || { cat "$TMP/perm"; exit 1; }
+ok "   $(tail -n 1 "$TMP/perm")"
+
+# 8. down e nova aplicação, comando a comando
+por_comando migrations/003_distribuicao_hibrida_down.sql >/dev/null
+exige "8. down da 003 comando a comando: pegar_lote da 002 de volta" [ "$(cfg)" = 'search_path=""' ]
+exige "   migracoes marca a reversão" [ "$($P -c "select revertida_em is not null from public.migracoes where versao='003_distribuicao_hibrida'")" = t ]
+por_comando migrations/003_distribuicao_hibrida.sql >/dev/null
+exige "   reaplicada após o down: $(sed 's/.*NOTICE:  //' "$TMP/notices")" grep -q "REAPLICADA" "$TMP/notices"
+exige "   pegar_lote da 003 ativa" [ "$(cfg)" = 'search_path="",lock_timeout=5s' ]
 
 echo "TODOS OS TESTES DE EXECUÇÃO SEPARADA PASSARAM"

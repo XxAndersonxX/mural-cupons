@@ -31,6 +31,7 @@ $P -c "grant anon, authenticated to authenticator" >/dev/null
 $P -f supabase.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/001_membros.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/002_copias_ranking.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
+$P -f migrations/003_distribuicao_hibrida.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 
 # um usuário de cada tipo + um código
 $P >/dev/null <<'SQL'
@@ -167,6 +168,15 @@ for perfil in anon estranho pendente rejeitado suspenso membro admin; do
   [ $perfil != admin ] && [ $perfil != anon ] && \
     confere $perfil POST "/rpc/admin_alterar_acesso" '{"p_alvo":"u_pend","p_acao":"aprovar"}' '^400 .*nao_admin'
 done
+
+# fase 3: trava presa > 5 s chega ao site como erro 'lote_ocupado' (e nada é registrado)
+$P -c "insert into public.codigos (plataforma, codigo, autor_id) values ('77', 'APITRAVA', 'u_admin')" >/dev/null
+( $P -c "begin; select 1 from public.codigos where codigo = 'APITRAVA' for update; select pg_sleep(7); commit;" >/dev/null ) &
+TRAVA=$!
+sleep 0.5
+confere membro POST "/rpc/pegar_lote" '{"p_plataforma":"77","p_quantidade":1}' '^400 .*lote_ocupado'
+wait $TRAVA
+confere membro POST "/rpc/pegar_lote" '{"p_plataforma":"77","p_quantidade":1}' '^200 \{.*"registrados" ?: ?1.*"APITRAVA"'
 
 # login pela API: estranho vira pendente (e continua sem acesso); entrar() antigo devolve texto
 confere estranho POST "/rpc/entrar_v2" '{}' '^200 \{"id" ?: ?"u_estranho".*"papel" ?: ?"pendente".*"acesso" ?: ?false'

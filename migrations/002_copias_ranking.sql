@@ -36,6 +36,10 @@ begin
   if not exists (select 1 from public.migracoes where versao = '001_membros' and revertida_em is null) then
     raise exception 'A migração 001_membros precisa estar aplicada antes da 002.';
   end if;
+  -- reaplicar a 002 com a 003 ativa trocaria a pegar_lote() da 003 pela antiga
+  if exists (select 1 from public.migracoes where versao = '003_distribuicao_hibrida' and revertida_em is null) then
+    raise exception 'A migração 003 está ativa: reaplicar a 002 desfaria a distribuição híbrida. Reverta a 003 antes (003_distribuicao_hibrida_down.sql), reaplique a 002 e depois a 003. Nada foi alterado.';
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------

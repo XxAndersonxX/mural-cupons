@@ -7,6 +7,14 @@
 -- =====================================================================
 begin;
 
+-- A 003 depende da pegar_lote() desta migração: reverta a 003 primeiro.
+do $$
+begin
+  if exists (select 1 from public.migracoes where versao = '003_distribuicao_hibrida' and revertida_em is null) then
+    raise exception 'Reverta a migração 003 antes (003_distribuicao_hibrida_down.sql). Nada foi alterado.';
+  end if;
+end $$;
+
 drop function if exists public.copiar_codigo_v2(bigint);
 drop function if exists public.pegar_lote(text, int);
 drop function if exists public.recuperar_lote(uuid);

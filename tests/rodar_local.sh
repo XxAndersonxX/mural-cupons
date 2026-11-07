@@ -31,7 +31,7 @@ sql() {
   ETAPA=$1
   echo "== $1"
   $P -f "$2" >"$LOG" 2>&1
-  grep -vE '^\s*$|^psql:.*NOTICE:  (constraint|policy|relation|function|table|index) .*(does not exist|already exists), skipping' "$LOG" || true
+  grep -vE '^\s*$|^\|+$|^psql:.*NOTICE:  (constraint|policy|relation|function|table|index) .*(does not exist|already exists), skipping' "$LOG" || true
 }
 # roda um comando SQL de verificação (teste.ok derruba se falso)
 verifica() { ETAPA=$1; $P -c "$2" >"$LOG" 2>&1; cat "$LOG"; }
@@ -128,6 +128,79 @@ sql "permissões após down da 002"           tests/04_permissoes.sql | tail -n 
 sql "reaplicar 002 depois do down"          migrations/002_copias_ranking.sql
 grep -q "MIGRAÇÃO 002 REAPLICADA" "$LOG" || { ETAPA="002 após down"; echo "esperava 002 REAPLICADA"; false; }
 sql "permissões finais"                     tests/04_permissoes.sql | tail -n 1
+
+# ===================== FASE 3 (migração 003) =====================
+ETAPA="003 exige a 002"; echo "== 003 recusa banco sem a 002"
+$P -c "update public.migracoes set revertida_em = now() where versao = '002_copias_ranking'" >/dev/null
+if $P -f migrations/003_distribuicao_hibrida.sql >"$LOG" 2>&1; then echo "a 003 deveria ter sido recusada"; false; fi
+grep -q "002_copias_ranking precisa estar aplicada" "$LOG"
+echo "ok  003 recusada sem a 002 (nada aplicado)"
+verifica "003 recusada não mexeu na pegar_lote" \
+  "select teste.ok((select array_to_string(proconfig, ',') from pg_proc where proname = 'pegar_lote') = 'search_path=\"\"', '003 recusada: pegar_lote da 002 intacta');"
+$P -c "update public.migracoes set revertida_em = null where versao = '002_copias_ranking'" >/dev/null
+
+verifica "foto antes da 003" "drop table if exists teste.antes3; create table teste.antes3 as select count(*) n, sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, ''))) h from public.copias;"
+sql "migração 003 — primeira aplicação"     migrations/003_distribuicao_hibrida.sql
+grep -q "MIGRAÇÃO 003 APLICADA" "$LOG" || { ETAPA="aviso da 003"; echo "esperava 003 APLICADA"; false; }
+verifica "003 não altera dados" \
+  "select teste.ok((select (count(*), sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, '')))) from public.copias) = (select (n, h) from teste.antes3), '003: cópias idênticas às de antes');"
+
+sql "fase 3: distribuição híbrida"          tests/09_distribuicao.sql
+ETAPA="concorrência da 003"; echo "== concorrência da 003"
+PSQL="$PSQL_BASE -d $DB" tests/10_concorrencia_hibrida.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+cat "$LOG"
+sql "permissões com a 003"                  tests/04_permissoes.sql | tail -n 1
+
+sql "migração 003 — reaplicação"            migrations/003_distribuicao_hibrida.sql
+grep -q "MIGRAÇÃO 003 REAPLICADA (execução nº 2)" "$LOG" || { ETAPA="aviso de reaplicação da 003"; echo "esperava 003 REAPLICADA nº 2"; false; }
+
+ETAPA="002 protegida pela 003"; echo "== reaplicar a 002 ou reverter a 002 com a 003 ativa: recusado"
+if $P -f migrations/002_copias_ranking.sql >"$LOG" 2>&1; then echo "a 002 deveria ter sido recusada"; false; fi
+grep -q "A migração 003 está ativa" "$LOG"
+if $P -f migrations/002_copias_ranking_down.sql >"$LOG" 2>&1; then echo "o down da 002 deveria ter sido recusado"; false; fi
+grep -q "Reverta a migração 003 antes" "$LOG"
+verifica "002 recusada não trocou a pegar_lote" \
+  "select teste.ok((select array_to_string(proconfig, ',') from pg_proc where proname = 'pegar_lote') = 'search_path=\"\",lock_timeout=5s'
+                   and to_regproc('public.copiar_codigo_v2') is not null, '002 e down da 002 recusados sem mexer em nada');"
+
+# um lote feito com a 003 precisa continuar recuperável depois do down
+$P >"$LOG" 2>&1 <<'SQL'
+insert into public.codigos (plataforma, codigo, autor_id) values ('BRA365', 'DOWN1', 'f3_cafe'), ('BRA365', 'DOWN2', 'f3_panda');
+select teste.como('f3_u', 'f3u'); set role authenticated;
+select public.pegar_lote('BRA365', 2);
+SQL
+verifica "foto antes do down da 003" "drop table if exists teste.antes3; create table teste.antes3 as select count(*) n, sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, ''))) h from public.copias;"
+sql "reversão da 003 (down)"                migrations/003_distribuicao_hibrida_down.sql
+verifica "down 003: dados intactos" \
+  "select teste.ok((select (count(*), sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, '')))) from public.copias) = (select (n, h) from teste.antes3), 'down 003: nenhuma cópia alterada');"
+verifica "down 003: pegar_lote da 002 de volta" \
+  "select teste.ok((select array_to_string(proconfig, ',') = 'search_path=\"\"' and prosrc like '%skip locked%' from pg_proc where proname = 'pegar_lote'), 'down 003: pegar_lote da 002 restaurada');"
+verifica "down 003: lote da 003 recuperável" \
+  "select teste.como('f3_u', 'f3u'); set role authenticated; select teste.ok((public.recuperar_lote() ->> 'registrados')::int = 2, 'down 003: lote feito com a 003 continua recuperável');"
+verifica "down 003: migração marcada" \
+  "select teste.ok((select revertida_em is not null from public.migracoes where versao = '003_distribuicao_hibrida'), 'down 003: migracoes.revertida_em preenchido');"
+sql "permissões após down da 003"           tests/04_permissoes.sql | tail -n 1
+sql "down da 003 de novo (idempotente)"     migrations/003_distribuicao_hibrida_down.sql
+
+sql "reaplicar 003 depois do down"          migrations/003_distribuicao_hibrida.sql
+grep -q "MIGRAÇÃO 003 REAPLICADA" "$LOG" || { ETAPA="003 após down"; echo "esperava 003 REAPLICADA"; false; }
+sql "permissões finais com a 003"           tests/04_permissoes.sql | tail -n 1
+
+# regressão: as baterias da Fase 2 rodam inteiras num banco novo com a 003
+ETAPA="regressão da Fase 2 com a 003"; echo "== regressão: testes da Fase 2 (06 e 07) num banco novo com 001+002+003"
+DB2=${DB}_f3
+trap '$PSQL_BASE -q -X -c "drop database if exists $DB" >/dev/null 2>&1 || true; $PSQL_BASE -q -X -c "drop database if exists $DB2" >/dev/null 2>&1 || true; rm -f "$LOG"' EXIT
+$PSQL_BASE -q -X -v ON_ERROR_STOP=1 -c "create database $DB2" >/dev/null
+P2="$PSQL_BASE -q -X -A -t -v ON_ERROR_STOP=1 -d $DB2"
+for f in tests/00_simular_supabase.sql supabase.sql tests/01_dados_existentes.sql migrations/001_membros.sql \
+         migrations/002_copias_ranking.sql migrations/003_distribuicao_hibrida.sql; do
+  $P2 -f "$f" >"$LOG" 2>&1 || { cat "$LOG"; false; }
+done
+$P2 -v fase3=1 -f tests/06_copias.sql >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  06_copias.sql com a 003 (-v fase3=1): $(grep -c '^ok' "$LOG") verificações; $(grep -c '(003)' "$LOG") com o valor esperado do critério novo"
+PSQL="$PSQL_BASE -d $DB2" tests/07_concorrencia_lote.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+sed 's/^/    /' "$LOG"
+$PSQL_BASE -q -X -c "drop database if exists $DB2" >/dev/null
 
 ETAPA="execução comando a comando (SQL Editor)"; echo "== execução comando a comando, cada um numa conexão (SQL Editor)"
 PSQL_BASE="$PSQL_BASE" tests/08_editor_separado.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
