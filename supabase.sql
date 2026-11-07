@@ -1,6 +1,6 @@
 -- =====================================================================
--- Mural de Cupons — banco no Supabase (login pelo Clerk)
--- Cole tudo no SQL Editor do Supabase e clique em Run (uma vez só).
+-- Mural de Cupons — banco no Supabase 
+-- 
 --
 -- Quem é o usuário vem do token do Clerk:
 --   auth.jwt()->>'sub'       = id do usuário no Clerk
