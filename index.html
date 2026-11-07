@@ -242,7 +242,7 @@ details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
       <div>
         <div class="linha" style="justify-content:space-between;margin-bottom:10px">
           <h2 id="tituloLista">Códigos</h2>
-          <span class="sub" style="font-size:13px">Os que vencem antes aparecem primeiro</span>
+          <span class="sub" style="font-size:13px">Os que vencem antes aparecem primeiro; os seus ficam no fim</span>
         </div>
         <p class="msg" id="msgLista" role="status"></p>
         <div class="lista" id="lista"><div class="vazio">Carregando códigos…</div></div>
@@ -789,8 +789,16 @@ function renderPlats() {
   $("tituloLista").textContent = `Códigos ${plataforma}`;
 }
 
+// Ordem só de exibição (não muda nada no banco): códigos dos outros primeiro,
+// os do usuário logado no fim — comparando pelo ID autenticado, nunca pelo nome.
+// Dentro de cada grupo, a ordem de sempre: vence antes primeiro (desempate pelo id).
+function ordenarParaListagem(lista, idLogado) {
+  const meu = c => (idLogado && c.autorId === idLogado ? 1 : 0);
+  return [...lista].sort((a, b) => meu(a) - meu(b) || a.criadoEm - b.criadoEm || a.id - b.id);
+}
+
 function renderLista() {
-  const lista = codigos.filter(c => c.plataforma === plataforma && ativo(c)).sort((a, b) => a.criadoEm - b.criadoEm);
+  const lista = ordenarParaListagem(codigos.filter(c => c.plataforma === plataforma && ativo(c)), eu && eu.id);
   if (!lista.length) {
     $("lista").innerHTML = `<div class="vazio">Nenhum código de ${esc(plataforma)} no momento. Poste os seus no quadro acima.</div>`;
     return;
