@@ -32,4 +32,10 @@ confere "RPC admin_alterar_acesso"       "$(pede POST /rpc/admin_alterar_acesso 
 confere "RPC postar_codigos"             "$(pede POST /rpc/postar_codigos '{"p_plataforma":"777","p_codigos":[]}')"
 confere "RPC copiar_codigo"              "$(pede POST /rpc/copiar_codigo '{"p_id":-1}')"
 confere "RPC apagar_codigo"              "$(pede POST /rpc/apagar_codigo '{"p_id":-1}')"
+# migração 002
+confere "RPC copiar_codigo_v2"           "$(pede POST /rpc/copiar_codigo_v2 '{"p_id":-1}')"
+confere "RPC pegar_lote"                 "$(pede POST /rpc/pegar_lote '{"p_plataforma":"XYZ","p_quantidade":1}')"
+confere "RPC recuperar_lote"             "$(pede POST /rpc/recuperar_lote '{}')"
+confere "RPC meus_lotes"                 "$(pede POST /rpc/meus_lotes '{}')"
+confere "RPC resumo_lote"                "$(pede POST /rpc/resumo_lote '{"p_lote":"00000000-0000-0000-0000-000000000000","p_pedidos":1}')"
 [ $falhas = 0 ] && echo "VISITANTE ANÔNIMO NÃO ACESSA NADA" || { echo "$falhas FALHAS"; exit 1; }

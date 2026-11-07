@@ -7,6 +7,8 @@ Site para um grupo de amigos compartilhar códigos de cupom das plataformas 777,
 - Site hospedado de graça no **GitHub Pages**
 - Cada código some depois de ser pego por **3 pessoas diferentes** ou **2 dias** depois de postado
 - Abas: Plataformas, Usuários, Ranking, Calculadora e Admin
+- **Copiar lista:** registra até 200 códigos numa operação só e copia um por linha (pronto para o `comprador_cupons.py`); dá para recuperar os lotes das últimas 48 h sem gastar cópias
+- **Ranking** por códigos postados, com a coluna "Aproveitados" (publicações que outro membro pegou)
 - **Acesso por aprovação:** qualquer pessoa pode criar conta e pedir para entrar, mas só vê os cupons depois que um administrador aprovar
 
 Arquivos:
@@ -29,7 +31,7 @@ Com as **três chaves vazias** no `index.html`, o site roda em **modo demonstra�
 
 1. Crie uma conta em <https://supabase.com> e clique em **New project**. Região: **South America (São Paulo)**. Guarde a senha do banco, mas o site não usa ela.
 2. Abra **SQL Editor** → **New query**, cole todo o conteúdo de `supabase.sql` e clique em **Run**. Deve aparecer "Success".
-   Depois aplique as migrações de `migrations/` seguindo **[docs/IMPLANTACAO.md](docs/IMPLANTACAO.md)** (hoje: `001_membros.sql`).
+   Depois aplique as migrações de `migrations/` seguindo **[docs/IMPLANTACAO.md](docs/IMPLANTACAO.md)** (hoje: `001_membros.sql` e `002_copias_ranking.sql`, nessa ordem).
 3. Vá em **Project Settings → API** (ou **Data API / API Keys**) e copie:
    - **Project URL** (ex.: `https://abcd1234.supabase.co`)
    - a chave **publishable** (ou **anon public**). **Nunca** use a `service_role` / `secret` no site.

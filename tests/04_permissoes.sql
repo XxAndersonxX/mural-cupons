@@ -69,7 +69,10 @@ create temp table esperado_fn (nome text, auth_executa boolean);
 insert into esperado_fn values
   ('eh_membro', true), ('eh_admin', true), ('entrar', true), ('entrar_v2', true),
   ('admin_alterar_acesso', true), ('postar_codigos', true), ('copiar_codigo', true), ('apagar_codigo', true),
-  ('registrar_entrada', false), ('definir_primeiro_admin', false), ('recuperacao_promover_admin', false);
+  ('registrar_entrada', false), ('definir_primeiro_admin', false), ('recuperacao_promover_admin', false),
+  -- migração 002 (só existem depois dela)
+  ('copiar_codigo_v2', true), ('pegar_lote', true), ('recuperar_lote', true), ('meus_lotes', true),
+  ('resumo_lote', false);
 
 select teste.ok(not exists (
   select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
