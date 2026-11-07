@@ -17,7 +17,7 @@ Arquivos:
 | Arquivo | Para que serve |
 |---|---|
 | `index.html` | O site inteiro |
-| `supabase.sql` | Cria o banco e as regras (rodar 1 vez no Supabase) |
+| `supabase.sql` | Cria o banco e as regras  |
 | `migrations/` | Mudanças do banco, em ordem (`001_membros.sql`…), cada uma com seu `_down.sql` para reverter |
 | `docs/IMPLANTACAO.md` | **Como aplicar uma migração**: ordem, verificação, primeira aplicação x reaplicação e recuperação |
 | `tests/` | Testes de segurança, permissões (SQL e API), concorrência e reversão — rodam num Postgres local, nunca no Supabase |
@@ -25,58 +25,6 @@ Arquivos:
 | `README.md` | Este passo a passo |
 
 Com as **três chaves vazias** no `index.html`, o site roda em **modo demonstração**: login só com nome e dados só no seu navegador. Com as chaves preenchidas, ele **nunca** cai no modo demonstração: se o Clerk ou o Supabase não carregarem, aparece uma mensagem de erro.
-
----
-
-## 1. Supabase (banco de dados)
-
-1. Crie uma conta em <https://supabase.com> e clique em **New project**. Região: **South America (São Paulo)**. Guarde a senha do banco, mas o site não usa ela.
-2. Abra **SQL Editor** → **New query**, cole todo o conteúdo de `supabase.sql` e clique em **Run**. Deve aparecer "Success".
-   Depois aplique as migrações de `migrations/` seguindo **[docs/IMPLANTACAO.md](docs/IMPLANTACAO.md)** (hoje: `001_membros.sql` e `002_copias_ranking.sql`, nessa ordem).
-3. Vá em **Project Settings → API** (ou **Data API / API Keys**) e copie:
-   - **Project URL** (ex.: `https://abcd1234.supabase.co`)
-   - a chave **publishable** (ou **anon public**). **Nunca** use a `service_role` / `secret` no site.
-
-## 2. Clerk (login com usuário e senha)
-
-1. Crie uma conta em <https://clerk.com> e crie uma **Application**.
-2. Em **Configure → User & authentication**:
-   - **Username**: ligado e obrigatório.
-   - **Password**: ligado.
-   - **Email address**: desligue, ou deixe opcional, se quiser cadastro só com usuário e senha.
-   - Desligue os logins sociais (Google etc.) se não quiser.
-3. Em **Configure → Sessions → Customize session token**, cole o texto abaixo e salve. Isso põe o nome de usuário no token, para o banco saber quem postou:
-   ```json
-   { "username": "{{user.username}}" }
-   ```
-4. Copie a **Publishable key** (começa com `pk_test_`) em **Configure → API keys**.
-
-## 3. Ligar o Clerk ao Supabase
-
-1. No Clerk, abra a configuração da integração com o Supabase (**Integrations → Supabase**, ou pelo guia [Integrate Supabase with Clerk](https://clerk.com/docs/guides/development/integrations/databases/supabase)) e **ative**. Ela mostra um **Clerk domain**: copie.
-2. No Supabase, vá em **Authentication → Sign In / Providers → Third-party auth → Add provider → Clerk** e cole esse domínio.
-
-## 4. Configurar o site
-
-Abra o `index.html` num editor (VS Code, Bloco de Notas) e preencha as três linhas no começo:
-
-```js
-const CLERK_PUBLISHABLE_KEY = "pk_test_...";
-const SUPABASE_URL          = "https://abcd1234.supabase.co";
-const SUPABASE_KEY          = "sb_publishable_...";   // ou a chave anon
-```
-
-Essas três chaves são **públicas** e podem ficar no código. Quem protege os dados são as regras do `supabase.sql`.
-
-## 5. Publicar grátis no GitHub Pages
-
-1. No GitHub, crie um repositório **público** (ex.: `mural-cupons`).
-2. **Add file → Upload files** → envie o `index.html` (o README é opcional) → **Commit**.
-3. **Settings → Pages** → em *Source* escolha **Deploy from a branch**, branch **main**, pasta **/(root)** → **Save**.
-4. Em 1 a 2 minutos o site fica em `https://SEU-USUARIO.github.io/mural-cupons/`.
-5. Mande o link para os amigos. Cada um clica em **Sign up**, escolhe usuário e senha, e pronto.
-
-Para atualizar o site depois, é só enviar o `index.html` novo no mesmo repositório.
 
 ---
 
