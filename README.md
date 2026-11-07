@@ -1,6 +1,7 @@
 # Mural de Cupons
 
-Site para um grupo de amigos compartilhar códigos de cupom das plataformas 777, BRA365, Sorte25 e 77.
+Site para um grupo de amigos compartilhar códigos de cupom das plataformas
+
 
 - Login com **usuário e senha** pelo [Clerk](https://clerk.com)
 - Códigos guardados no [Supabase](https://supabase.com)
