@@ -1,6 +1,12 @@
 -- Testes da migração 002: cópia individual com motivo, lote, recuperação,
 -- permissões e "aproveitados". Rodar DEPOIS da 002 (usa ids próprios "f2_").
 \set ON_ERROR_STOP on
+-- Com -v fase3=1 roda contra a pegar_lote() da migração 003: só as 3
+-- verificações que dependem do CRITÉRIO de escolha mudam de valor esperado.
+\if :{?fase3}
+\else
+\set fase3 0
+\endif
 \pset tuples_only on
 \pset format unaligned
 
@@ -56,8 +62,10 @@ select teste.como('f2_b', 'f2b');
 insert into lotes select 'f2_b', (public.pegar_lote('Sorte25', 3) ->> 'lote_id')::uuid;
 reset role;
 select teste.ok((select string_agg(c.codigo, ',' order by c.criado_em, c.id) from public.copias p join public.codigos c on c.id = p.codigo_id
-                 where p.lote_id = (select lote from lotes where dono = 'f2_b')) = 'S1,S2,S3',
-                'lote: 3 pedidos -> S1,S2,S3 (vencimento mais próximo primeiro; ignora vencido, esgotado e já pegos)');
+                 where p.lote_id = (select lote from lotes where dono = 'f2_b'))
+                = case when :fase3 = 1 then 'S1,S2,SA' else 'S1,S2,S3' end,
+                case when :fase3 = 1 then 'lote (003): 3 pedidos -> S1,S2,SA (1 de cada autor, depois o mais antigo; ignora vencido, esgotado e já pegos)'
+                     else 'lote: 3 pedidos -> S1,S2,S3 (vencimento mais próximo primeiro; ignora vencido, esgotado e já pegos)' end);
 
 set role authenticated;
 select teste.como('f2_a', 'f2a');
@@ -74,8 +82,10 @@ reset role;
 
 select teste.ok((select count(*) from public.copias p where p.lote_id = (select lote from lotes where dono = 'f2_c')) = 7, 'lote f2_c: 7 registrados (S1..S6 + SA)');
 select teste.ok((select string_agg(c.codigo, ',' order by c.criado_em, c.id) from public.copias p join public.codigos c on c.id = p.codigo_id
-                 where p.lote_id = (select lote from lotes where dono = 'f2_d')) = 'S4,S5,S6,SA',
-                'lote f2_d: só os que ainda tinham vaga (S1..S3 esgotaram)');
+                 where p.lote_id = (select lote from lotes where dono = 'f2_d'))
+                = case when :fase3 = 1 then 'S3,S4,S5,S6,SA' else 'S4,S5,S6,SA' end,
+                case when :fase3 = 1 then 'lote f2_d (003): só os que ainda tinham vaga (S1, S2 esgotaram)'
+                     else 'lote f2_d: só os que ainda tinham vaga (S1..S3 esgotaram)' end);
 select teste.ok((select max(n) from (select count(*) n from public.copias where codigo_id in (select id from ids) group by codigo_id) t) = 3,
                 'nenhum código passou de 3 cópias');
 
@@ -117,7 +127,7 @@ reset role;
 delete from public.codigos where codigo = 'S6' and plataforma = 'Sorte25';
 set role authenticated;
 select teste.como('f2_d', 'f2d');
-select teste.ok((public.recuperar_lote() ->> 'registrados')::int = 3, 'recuperar: código apagado sai do lote');
+select teste.ok((public.recuperar_lote() ->> 'registrados')::int = case when :fase3 = 1 then 4 else 3 end, 'recuperar: código apagado sai do lote');
 reset role;
 
 -- ---------- 4. Permissões ----------

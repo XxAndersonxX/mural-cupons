@@ -8,7 +8,7 @@ Site para um grupo de amigos compartilhar códigos de cupom das plataformas
 - Site hospedado de graça no **GitHub Pages**
 - Cada código some depois de ser pego por **3 pessoas diferentes** ou **2 dias** depois de postado
 - Abas: Plataformas, Usuários, Ranking, Calculadora e Admin
-- **Copiar lista:** registra até 200 códigos numa operação só e copia um por linha (pronto para o `comprador_cupons.py`); dá para recuperar os lotes das últimas 48 h sem gastar cópias
+- **Copiar lista:** registra até 200 códigos numa operação só, divididos igualmente entre quem postou (sempre os mais antigos de cada pessoa primeiro), e copia um por linha (pronto para o `comprador_cupons.py`); dá para recuperar os lotes das últimas 48 h sem gastar cópias
 - **Ranking** por códigos postados, com a coluna "Aproveitados" (publicações que outro membro pegou)
 - **Acesso por aprovação:** qualquer pessoa pode criar conta e pedir para entrar, mas só vê os cupons depois que um administrador aprovar
 

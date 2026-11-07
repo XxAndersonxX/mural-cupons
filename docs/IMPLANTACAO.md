@@ -227,3 +227,81 @@ A 001 só pode ser revertida **depois** da 002: o `001_membros_down.sql` recusa 
 ## Observação sobre a 001 no SQL Editor
 
 A `001_membros.sql` (já aplicada em produção) ainda usa uma tabela temporária (`_m001`) **só na mensagem final**. Quando o editor executa comando a comando, todos os comandos anteriores são aplicados normalmente e apenas essa mensagem falha com `relation "_m001" does not exist`. O registro em `public.migracoes` é gravado **antes** dela, então o banco fica correto. Para conferir depois de uma reaplicação da 001, use as consultas do passo 3 da 001 em vez da mensagem.
+
+# Migração 003 (distribuição híbrida do lote)
+
+Aplica `migrations/003_distribuicao_hibrida.sql`. Ela troca **só o critério de escolha** da `pegar_lote()`: mesmo nome, mesmos parâmetros, mesmo formato de resposta e mesmas permissões. Não cria nem altera tabelas, colunas, views ou dados. Leva uns 5 minutos.
+
+## O que muda para quem usa
+
+| | Antes (002) | Depois (003) |
+|---|---|---|
+| Quais códigos o lote leva | os N que vencem antes, de quem quer que seja | **divididos igualmente entre quem postou**; quem tem menos que a sua parte entrega tudo e a sobra vai para os outros |
+| Sobra que não divide igual | — | vai para quem tem o **próximo código mais antigo** (empate exato: menor id) |
+| Dentro de cada pessoa | do mais antigo para o mais novo | igual (obrigatório: nunca um mais novo enquanto houver um mais antigo dela disponível) |
+| Ordem do texto copiado | vencimento | **igual**: do que vence antes para o que vence depois, sem agrupar por autor |
+| Dois lotes na mesma plataforma ao mesmo tempo | o segundo pulava códigos ocupados e podia vir menor | o segundo **espera** o primeiro (milissegundos) e recebe o que sobrou de verdade |
+| Espera maior que 5 s (muito raro) | — | "Muita gente pegando códigos desta plataforma agora. Nada foi registrado: tente de novo" |
+
+O equilíbrio é **por pedido**: não há compensação entre lotes diferentes. As regras não mudam: 48 horas, até 3 pessoas distintas, uma cópia por pessoa, autor não conta, máximo de 200, só volta o que foi registrado, recuperação e ranking iguais.
+
+Exemplos (N = 60): 10/10/70/10 → **10/10/30/10**; 10/10/60/20 → **10/10/20/20**; 5/20/60/25 → **5 + 18/18/18 + 1** para quem tem o 19º código mais antigo entre Café, Panda e João.
+
+## Compatibilidade entre site e banco
+
+| Site \ Banco | Banco com a 002 | Banco com a 003 |
+|---|---|---|
+| **Site atual (`main`)** | normal | normal; no caso raro de espera > 5 s, mostra um erro genérico em vez da mensagem "tente de novo" |
+| **Site novo (`fase3-distribuicao-hibrida`)** | normal (critério antigo; só o texto de ajuda já descreve o novo) | normal |
+
+Qualquer ordem funciona. Recomendado: **migração primeiro, merge logo depois**.
+
+## Passo a passo
+
+1. **Snapshot de dados** (só uma cópia das linhas; não é backup completo):
+   ```sql
+   create schema if not exists backup;
+   create table backup.copias_antes_003 as select * from public.copias;
+   select count(*) from backup.copias_antes_003;
+   ```
+2. **Aplicar:** cole `migrations/003_distribuicao_hibrida.sql` inteiro no SQL Editor e clique em **Run**.
+   - Como a 002, ela não depende de o editor manter transação ou sessão entre comandos: sem tabela temporária, todo comando pode ser repetido, e primeira aplicação x reaplicação vêm de `public.migracoes`. Testado executando cada um dos 8 comandos numa conexão separada, e interrompendo a execução em cada ponto possível antes de completar de novo (`tests/08_editor_separado.sh`). Em nenhum ponto a `pegar_lote()` fica sem permissão para os membros.
+   - Esperado: `MIGRAÇÃO 003 APLICADA: pegar_lote() com distribuição híbrida; nenhum dado alterado.`
+   - `A migração 002_copias_ranking precisa estar aplicada antes da 003`: nada foi feito.
+   - `MIGRAÇÃO 003 REAPLICADA (execução nº N)`: já tinha rodado; seguro.
+   - Erro no meio ou sem mensagem final: corrija a causa, se houver, e **rode o arquivo inteiro de novo**.
+3. **Verificar (só leitura):**
+   ```sql
+   select versao, aplicacoes, revertida_em from public.migracoes order by versao;
+   select array_to_string(proconfig, ',') from pg_proc where proname = 'pegar_lote';
+     -- search_path="",lock_timeout=5s
+   select count(*) from public.copias;   -- igual ao snapshot
+   ```
+   E `tests/verificar_supabase_anon.sh` deve terminar em "VISITANTE ANÔNIMO NÃO ACESSA NADA".
+4. **Merge** do PR `fase3-distribuicao-hibrida → main`. Espere 1 a 2 minutos e recarregue com **Ctrl+F5**.
+5. **Testes reais** (abaixo).
+
+## Testes reais depois do merge
+
+| # | Teste | Esperado |
+|---|---|---|
+| 1 | Com códigos de 3+ pessoas na plataforma, "Copiar lista" com N pequeno (ex.: 3) | 1 código de cada pessoa (as 3 com código mais antigo) |
+| 2 | Uma pessoa com muitos códigos e outras com poucos | os poucos vêm todos; o resto sai da que tem muitos |
+| 3 | Dentro de cada pessoa | os mais antigos dela; nunca um mais novo no lugar de um mais antigo disponível |
+| 4 | Ordem do texto colado | do que vence antes para o que vence depois |
+| 5 | Duas pessoas pedindo lote ao mesmo tempo | ninguém recebe repetido, nenhum código passa de 3/3, nenhum dos dois fica menor sem necessidade |
+| 6 | Recuperar um lote ("Meus lotes") | mesma lista; contadores não mudam |
+| 7 | Cópia individual, ranking, administração | iguais a antes |
+
+## Reverter
+
+1. **Site (opcional):** o site da Fase 3 funciona com a 002; se quiser, dê **Revert** no PR.
+2. **Banco:** rode `migrations/003_distribuicao_hibrida_down.sql`. Ele recoloca a `pegar_lote()` da 002 (com `SKIP LOCKED`). **Nenhum dado é alterado**; lotes feitos com a 003 continuam recuperáveis. Pode ser rodado de novo sem efeito.
+3. **Conferir:** `select count(*) from public.copias;` bate com o snapshot.
+
+Proteções:
+
+- `002_copias_ranking_down.sql` **recusa** enquanto a 003 estiver ativa (reverta a 003 antes).
+- Reaplicar `002_copias_ranking.sql` com a 003 ativa também é **recusado**, porque desfaria a distribuição híbrida sem avisar. Para reaplicar a 002, primeiro reverta a 003, depois reaplique a 002 e então a 003.
+
+Esses dois arquivos da 002 ganharam só essa verificação no começo; para quem não tem a 003, eles se comportam exatamente como antes.

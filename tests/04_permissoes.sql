@@ -89,7 +89,9 @@ select teste.ok(bool_and(has_function_privilege('authenticated', p.oid, 'execute
                 'authenticated: executa só as funções do site')
 from pg_proc p join esperado_fn e on e.nome = p.proname join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public';
 
-select teste.ok(bool_and(p.prosecdef and array_to_string(p.proconfig, ',') = 'search_path=""'),
+-- única exceção permitida: pegar_lote() da 003 também fixa lock_timeout (espera máx. 5 s)
+select teste.ok(bool_and(p.prosecdef and (array_to_string(p.proconfig, ',') = 'search_path=""'
+                  or (p.proname = 'pegar_lote' and array_to_string(p.proconfig, ',') = 'search_path="",lock_timeout=5s'))),
                 'todas as funções: security definer com search_path vazio')
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public';
 

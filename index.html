@@ -217,7 +217,7 @@ details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
         </div>
         <div class="painel">
           <h2>Pegar vários de uma vez</h2>
-          <p class="sub" style="font-size:13px">Registra e copia até 200 códigos, um por linha, prontos para colar no comprador. Começa pelos que vencem antes e pula os seus, os que você já pegou, os vencidos e os esgotados.</p>
+          <p class="sub" style="font-size:13px">Registra e copia até 200 códigos, um por linha, prontos para colar no comprador. Divide igualmente entre quem postou, sempre dos códigos mais antigos para os mais novos de cada pessoa, e pula os seus, os que você já pegou, os vencidos e os esgotados.</p>
           <div class="linha" style="margin-top:10px">
             <div style="width:110px"><label for="inQtdLote">Quantidade</label><input type="number" id="inQtdLote" min="1" max="200" value="10"></div>
             <div style="align-self:flex-end"><button class="btn" id="btnLote" type="button">Copiar lista</button></div>
@@ -352,7 +352,7 @@ const CODIGOS_CONHECIDOS = [
   "config_incompleta", "supabase_indisponivel", "clerk_indisponivel", "conta_sem_username",
   "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
   "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
-  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado",
+  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado", "lote_ocupado",
 ];
 const MENSAGENS = {
   config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
@@ -373,6 +373,7 @@ const MENSAGENS = {
   usuario_inexistente: "Esse usuário não existe mais. A lista foi atualizada.",
   maximo_200_por_vez: "Máximo de 200 códigos por vez.",
   quantidade_invalida: "Escolha uma quantidade entre 1 e 200.",
+  lote_ocupado: "Muita gente pegando códigos desta plataforma agora. Nada foi registrado: tente de novo em alguns segundos.",
   lote_nao_encontrado: "Esse lote não está mais disponível (só dá para recuperar lotes seus das últimas 48 horas).",
   banco_desatualizado: "O site foi atualizado, mas o banco de dados ainda não. Avise um administrador (docs/IMPLANTACAO.md) e tente de novo em alguns minutos.",
   jwt_recusado: "O banco recusou o login. Saia e entre de novo; se continuar, confira a integração Clerk ↔ Supabase (README).",
@@ -586,8 +587,14 @@ function criarLojaDemo() {
       const e = ler(); exigeMembro(e);
       if (!(n >= 1 && n <= 200)) throw erroCom("quantidade_invalida");
       e.lotes = e.lotes || [];
+      // mesmo critério da migração 003: nível = posição na fila do autor; ordem (nível, criado, id)
+      const nivel = {};
       const escolha = e.codigos.filter(c => c.plataforma === plat && ativoC(c) && c.autorId !== meuId && !c.copiadoPor.includes(meuId))
-        .sort((a, b) => a.criadoEm - b.criadoEm || a.id - b.id).slice(0, n);
+        .sort((a, b) => a.criadoEm - b.criadoEm || a.id - b.id)
+        .map(c => ({ c, nv: (nivel[c.autorId] = (nivel[c.autorId] || 0) + 1) }))
+        .sort((a, b) => a.nv - b.nv || a.c.criadoEm - b.c.criadoEm || a.c.id - b.c.id)
+        .slice(0, n).map(x => x.c)
+        .sort((a, b) => a.criadoEm - b.criadoEm || a.id - b.id);
       escolha.forEach(c => c.copiadoPor.push(meuId));
       if (!escolha.length) { gravar(e); return { lote_id: null, pedidos: n, registrados: 0, plataforma: plat, codigos: [] }; }
       const lote = { lote_id: "demo-" + e.seq++, dono: meuId, plataforma: plat, criado_em: agora(), ids: escolha.map(c => c.id) };
