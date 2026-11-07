@@ -87,3 +87,11 @@ PSQL_BASE="psql -h 127.0.0.1 -p 5432 -U postgres" PG_HOST=127.0.0.1 PG_PORT=5432
 ```
 
 Roda o banco original com dados, aplica a migração (primeira vez), testes de segurança, permissões e concorrência, reaplica, reverte, reaplica de novo e, opcionalmente, testa tudo pela API. Qualquer erro interrompe a bateria; a mensagem `BATERIA COMPLETA OK` só aparece se todas as etapas passarem.
+
+Carga paginada do site (navegador real + supabase-js + PostgREST com limite de 1000 linhas; Postgres local na porta 5499 e Clerk simulado):
+
+```bash
+npm install --no-save @supabase/supabase-js@2.45.4   # mesma versão do index.html; precisa também do playwright
+POSTGREST=/caminho/postgrest tests/paginacao/preparar.sh
+node tests/paginacao/teste_paginacao.js
+```
