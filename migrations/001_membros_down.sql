@@ -9,6 +9,15 @@
 -- =====================================================================
 begin;
 
+-- a 002 depende da 001: ela precisa ser revertida primeiro
+do $$
+begin
+  if to_regclass('public.migracoes') is not null
+     and exists (select 1 from public.migracoes where versao = '002_copias_ranking' and revertida_em is null) then
+    raise exception 'Reverta a migração 002 (002_copias_ranking_down.sql) antes de reverter a 001.';
+  end if;
+end $$;
+
 -- políticas originais
 drop policy if exists "usuarios: admin, membros ativos ou o proprio" on public.usuarios;
 drop policy if exists "codigos: membros ativos" on public.codigos;

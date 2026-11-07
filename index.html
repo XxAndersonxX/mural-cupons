@@ -138,6 +138,12 @@ td.num,th.num{text-align:right}
 .acoes-admin{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .evento{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .evento time{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.copia-manual{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.copia-manual input{flex:1 1 160px;min-width:0;font-family:var(--mono);font-weight:700}
+#saidaLote{font-family:var(--mono);font-size:14px;line-height:1.5;margin-top:8px}
+.lotes{display:grid;gap:6px;margin-top:8px}
+.lote-item{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:6px}
+details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
 .aviso-demo{background:var(--warn-soft);color:var(--warn);font-size:13px;font-weight:700;text-align:center;padding:6px 12px}
 </style>
 </head>
@@ -211,13 +217,25 @@ td.num,th.num{text-align:right}
         </div>
         <div class="painel">
           <h2>Pegar vários de uma vez</h2>
-          <p class="sub" style="font-size:13px">Copia uma lista {a b c} pronta para colar no comprador. Pula os seus e os que você já pegou.</p>
+          <p class="sub" style="font-size:13px">Registra e copia até 200 códigos, um por linha, prontos para colar no comprador. Começa pelos que vencem antes e pula os seus, os que você já pegou, os vencidos e os esgotados.</p>
           <div class="linha" style="margin-top:10px">
             <div style="width:110px"><label for="inQtdLote">Quantidade</label><input type="number" id="inQtdLote" min="1" max="200" value="10"></div>
             <div style="align-self:flex-end"><button class="btn" id="btnLote" type="button">Copiar lista</button></div>
           </div>
-          <p class="msg" id="msgLote"></p>
-          <textarea id="saidaLote" readonly hidden style="margin-top:8px;min-height:80px"></textarea>
+          <p class="msg" id="msgLote" role="status"></p>
+          <div id="resultadoLote" hidden>
+            <label for="saidaLote" id="rotuloLote">Códigos registrados (um por linha)</label>
+            <textarea id="saidaLote" readonly rows="5"></textarea>
+            <div class="linha" style="margin-top:6px">
+              <button class="btn sec min" type="button" id="btnCopiarDeNovo">Copiar de novo</button>
+              <span class="sub" style="font-size:13px">Copiar de novo não gasta cópias.</span>
+            </div>
+          </div>
+          <details id="meusLotes">
+            <summary>Meus lotes das últimas 48 h</summary>
+            <p class="sub" style="font-size:13px;margin:6px 0 0">Recuperar um lote copia de novo os mesmos códigos, sem registrar novas cópias.</p>
+            <div class="lotes" id="listaMeusLotes"></div>
+          </details>
         </div>
       </div>
 
@@ -226,6 +244,7 @@ td.num,th.num{text-align:right}
           <h2 id="tituloLista">Códigos</h2>
           <span class="sub" style="font-size:13px">Os que vencem antes aparecem primeiro</span>
         </div>
+        <p class="msg" id="msgLista" role="status"></p>
         <div class="lista" id="lista"><div class="vazio">Carregando códigos…</div></div>
       </div>
     </div>
@@ -236,7 +255,7 @@ td.num,th.num{text-align:right}
     <p class="sub">Quem participa do mural.</p>
     <div class="painel tab-wrap" style="margin-top:14px">
       <table>
-        <thead><tr><th>Usuário</th><th class="num">Ativos agora</th><th class="num">Postados</th><th class="num">Pegou</th><th>Entrou em</th></tr></thead>
+        <thead><tr><th>Usuário</th><th class="num">Ativos agora</th><th class="num">Postados</th><th class="num" title="Publicações que outro membro pegou ao menos uma vez">Aproveitados</th><th class="num">Pegou</th><th>Entrou em</th></tr></thead>
         <tbody id="tbUsuarios"></tbody>
       </table>
     </div>
@@ -244,10 +263,10 @@ td.num,th.num{text-align:right}
 
   <section id="v-ranking" data-view hidden>
     <h1>Ranking de códigos postados</h1>
-    <p class="sub">Total de códigos que cada um já postou no mural.</p>
+    <p class="sub">Ordenado pelo total de códigos postados. “Aproveitados” conta as publicações que outro membro pegou ao menos uma vez (cada código conta uma vez).</p>
     <div class="painel tab-wrap" style="margin-top:14px">
       <table>
-        <thead><tr><th></th><th>Usuário</th><th class="num">Postados</th><th style="width:40%"></th></tr></thead>
+        <thead><tr><th></th><th>Usuário</th><th class="num">Postados</th><th class="num" title="Publicações que outro membro pegou ao menos uma vez">Aproveitados</th><th style="width:36%"></th></tr></thead>
         <tbody id="tbRanking"></tbody>
       </table>
     </div>
@@ -333,7 +352,7 @@ const CODIGOS_CONHECIDOS = [
   "config_incompleta", "supabase_indisponivel", "clerk_indisponivel", "conta_sem_username",
   "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
   "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
-  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado",
+  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado",
 ];
 const MENSAGENS = {
   config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
@@ -353,6 +372,8 @@ const MENSAGENS = {
   motivo_longo: "O motivo pode ter no máximo 300 caracteres.",
   usuario_inexistente: "Esse usuário não existe mais. A lista foi atualizada.",
   maximo_200_por_vez: "Máximo de 200 códigos por vez.",
+  quantidade_invalida: "Escolha uma quantidade entre 1 e 200.",
+  lote_nao_encontrado: "Esse lote não está mais disponível (só dá para recuperar lotes seus das últimas 48 horas).",
   banco_desatualizado: "O site foi atualizado, mas o banco de dados ainda não. Avise um administrador (docs/IMPLANTACAO.md) e tente de novo em alguns minutos.",
   jwt_recusado: "O banco recusou o login. Saia e entre de novo; se continuar, confira a integração Clerk ↔ Supabase (README).",
   sem_conexao: "Sem conexão com o servidor. Verifique a internet e tente de novo.",
@@ -365,7 +386,7 @@ function codigoDoErro(e) {
   const c = CODIGOS_CONHECIDOS.find(k => m.includes(k));
   if (c) return c;
   // função/coluna nova ainda não existe no banco (site atualizado antes da migração)
-  if ((e && e.code === "PGRST202") || /Could not find the function public\.(entrar_v2|admin_alterar_acesso)/.test(m)) return "banco_desatualizado";
+  if ((e && e.code === "PGRST202") || /Could not find the function public\.(entrar_v2|admin_alterar_acesso|copiar_codigo_v2|pegar_lote|recuperar_lote|meus_lotes)/.test(m)) return "banco_desatualizado";
   if (/(papel|situacao|eventos_acesso)/.test(m) && /does not exist|Could not find/.test(m)) return "banco_desatualizado";
   if (/JWT|PGRST301|401/.test(m)) return "jwt_recusado";
   if (/Failed to fetch|NetworkError|Load failed|network/i.test(m)) return "sem_conexao";
@@ -465,11 +486,14 @@ function criarLojaReal() {
         codigos: a.data.map(c => ({ id: c.id, plataforma: c.plataforma, codigo: c.codigo, autorId: c.autor_id, autor: c.autor,
                                     criadoEm: Date.parse(c.criado_em), copias: c.copias, copiadoPor: c.copiado_por || [] })),
         usuarios: b.data.map(u => ({ id: u.id, nome: u.nome, postados: u.postados, copiados: u.copiados, ativos: u.ativos,
-                                     criadoEm: Date.parse(u.criado_em) })),
+                                     aproveitados: u.aproveitados ?? 0, criadoEm: Date.parse(u.criado_em) })),
       };
     },
     postar: (plataforma, codigos) => rpc("postar_codigos", { p_plataforma: plataforma, p_codigos: codigos }),
-    pegar: id => rpc("copiar_codigo", { p_id: id }),
+    copiarV2: id => rpc("copiar_codigo_v2", { p_id: id }),
+    pegarLote: (plataforma, n) => rpc("pegar_lote", { p_plataforma: plataforma, p_quantidade: n }),
+    recuperarLote: id => rpc("recuperar_lote", id ? { p_lote: id } : {}),
+    meusLotes: () => rpc("meus_lotes"),
     apagar: id => rpc("apagar_codigo", { p_id: id }),
     async adminUsuarios() {
       const { data, error } = await sb.from("usuarios").select("id,nome,papel,situacao,criado_em,atualizado_em").order("criado_em");
@@ -492,7 +516,7 @@ function criarLojaReal() {
    ===================================================================== */
 function criarLojaDemo() {
   const CH = "mural-cupons-demo-v2";
-  const vazio = () => ({ usuarios: {}, codigos: [], eventos: [], seq: 1 });
+  const vazio = () => ({ usuarios: {}, codigos: [], eventos: [], lotes: [], seq: 1 });
   const ler = () => { try { return JSON.parse(localStorage.getItem(CH)) || vazio(); } catch { return vazio(); } };
   const gravar = e => { try { localStorage.setItem(CH, JSON.stringify(e)); } catch {} };
   const agora = () => new Date().toISOString();
@@ -536,6 +560,7 @@ function criarLojaDemo() {
         postados: e.codigos.filter(c => c.autorId === u.id).length,
         copiados: e.codigos.filter(c => c.copiadoPor.includes(u.id)).length,
         ativos: codigos.filter(c => c.autorId === u.id).length,
+        aproveitados: e.codigos.filter(c => c.autorId === u.id && c.copiadoPor.some(x => x !== u.id)).length,
       }));
       return { codigos, usuarios };
     },
@@ -548,10 +573,42 @@ function criarLojaDemo() {
       }
       gravar(e); return { adicionados, repetidos };
     },
-    async pegar(id) {
+    async copiarV2(id) {
       const e = ler(); exigeMembro(e); const c = e.codigos.find(x => x.id === id);
-      if (!c || !ativoC(c) || c.autorId === meuId || c.copiadoPor.includes(meuId)) return false;
-      c.copiadoPor.push(meuId); gravar(e); return true;
+      if (!c) return { status: "inexistente" };
+      if (c.criadoEm + VALIDADE_MS <= Date.now()) return { status: "expirado" };
+      if (c.autorId === meuId) return { status: "proprio", codigo: c.codigo };
+      if (c.copiadoPor.includes(meuId)) return { status: "ja_copiado", codigo: c.codigo };
+      if (c.copiadoPor.length >= MAX_COPIAS) return { status: "esgotado" };
+      c.copiadoPor.push(meuId); gravar(e); return { status: "registrado", codigo: c.codigo };
+    },
+    async pegarLote(plat, n) {
+      const e = ler(); exigeMembro(e);
+      if (!(n >= 1 && n <= 200)) throw erroCom("quantidade_invalida");
+      e.lotes = e.lotes || [];
+      const escolha = e.codigos.filter(c => c.plataforma === plat && ativoC(c) && c.autorId !== meuId && !c.copiadoPor.includes(meuId))
+        .sort((a, b) => a.criadoEm - b.criadoEm || a.id - b.id).slice(0, n);
+      escolha.forEach(c => c.copiadoPor.push(meuId));
+      if (!escolha.length) { gravar(e); return { lote_id: null, pedidos: n, registrados: 0, plataforma: plat, codigos: [] }; }
+      const lote = { lote_id: "demo-" + e.seq++, dono: meuId, plataforma: plat, criado_em: agora(), ids: escolha.map(c => c.id) };
+      e.lotes.unshift(lote); gravar(e);
+      return { ...this._resumo(e, lote), pedidos: n };
+    },
+    _resumo(e, lote) {
+      const cods = lote.ids.map(id => e.codigos.find(c => c.id === id)).filter(Boolean);
+      return { lote_id: lote.lote_id, pedidos: null, registrados: cods.length, plataforma: lote.plataforma, criado_em: lote.criado_em,
+               codigos: cods.map(c => ({ id: c.id, codigo: c.codigo })) };
+    },
+    async recuperarLote(id) {
+      const e = ler(); exigeMembro(e);
+      const lote = (e.lotes || []).find(l => l.dono === meuId && (!id || l.lote_id === id) && Date.parse(l.criado_em) + VALIDADE_MS > Date.now());
+      if (!lote) throw erroCom("lote_nao_encontrado");
+      return this._resumo(e, lote);
+    },
+    async meusLotes() {
+      const e = ler(); exigeMembro(e);
+      return (e.lotes || []).filter(l => l.dono === meuId && Date.parse(l.criado_em) + VALIDADE_MS > Date.now())
+        .map(l => ({ lote_id: l.lote_id, plataforma: l.plataforma, registrados: l.ids.length, criado_em: l.criado_em }));
     },
     async apagar(id) {
       const e = ler(); exigeMembro(e); const antes = e.codigos.length;
@@ -606,13 +663,50 @@ function restante(c) {
   return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h ? `${h}h ${m}min` : `${m}min`;
 }
 
-async function copiarTexto(t) {
+/* Área de transferência
+   - copiarAgora(texto): quando o texto já está na mão (clique direto).
+   - copiarDepois(promessa): quando o texto só existe depois da resposta do banco.
+     1) ClipboardItem com promessa, chamado ainda dentro do clique (Chrome, Safari, Firefox recente);
+     2) se não houver suporte ou for recusado, writeText depois da resposta (funciona se ainda
+        estiver dentro da janela do clique);
+     3) se tudo falhar, devolve "falhou" e quem chamou mostra o texto para cópia manual.
+   Devolve "ok", "nada" (a promessa deu null: não havia o que copiar) ou "falhou". */
+async function copiarAgora(t) {
   try { await navigator.clipboard.writeText(t); return true; }
   catch {
-    const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select();
+    const ta = document.createElement("textarea"); ta.value = t; ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
     let ok = false; try { ok = document.execCommand("copy"); } catch {}
     ta.remove(); return ok;
   }
+}
+async function copiarDepois(promessaTexto) {
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const blob = promessaTexto.then(t => { if (t == null) throw new Error("nada"); return new Blob([t], { type: "text/plain" }); });
+      blob.catch(() => {});   // "nada a copiar" não é erro: evita rejeição não tratada
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      return "ok";
+    } catch { /* sem suporte a promessa, recusado ou nada a copiar: segue */ }
+  }
+  const t = await promessaTexto;
+  if (t == null) return "nada";
+  try { await navigator.clipboard.writeText(t); return "ok"; } catch { return "falhou"; }
+}
+// caixa com o texto selecionado + botão (um clique novo sempre consegue copiar)
+function mostrarCopiaManual(alvo, texto) {
+  const caixa = document.createElement("div");
+  caixa.className = "copia-manual";
+  caixa.innerHTML = `<input type="text" readonly aria-label="Código para copiar"><button class="btn min" type="button">Copiar</button>`;
+  const inp = caixa.querySelector("input"), bt = caixa.querySelector("button");
+  inp.value = texto;
+  bt.addEventListener("click", async () => {
+    const ok = await copiarAgora(texto);
+    bt.textContent = ok ? "Copiado" : "Use Ctrl+C";
+    inp.select();
+  });
+  alvo.appendChild(caixa);
+  inp.focus(); inp.select();
 }
 
 /* ---------- tela de login / status ---------- */
@@ -719,9 +813,9 @@ function renderUsuarios() {
   const l = [...usuarios].sort((a, b) => a.nome.localeCompare(b.nome));
   $("tbUsuarios").innerHTML = l.length ? l.map(u => `<tr${eu && u.id === eu.id ? ' style="font-weight:700"' : ""}>
     <td>${esc(u.nome)}${eu && u.id === eu.id ? ' <span class="tag">você</span>' : ""}</td>
-    <td class="num">${u.ativos}</td><td class="num">${u.postados}</td><td class="num">${u.copiados}</td>
+    <td class="num">${u.ativos}</td><td class="num">${u.postados}</td><td class="num">${u.aproveitados ?? 0}</td><td class="num">${u.copiados}</td>
     <td>${new Date(u.criadoEm).toLocaleDateString("pt-BR")}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="sub">Ninguém entrou ainda.</td></tr>`;
+    : `<tr><td colspan="6" class="sub">Ninguém entrou ainda.</td></tr>`;
 }
 
 function renderRanking() {
@@ -729,9 +823,9 @@ function renderRanking() {
   const max = Math.max(1, ...l.map(u => u.postados));
   $("tbRanking").innerHTML = l.length ? l.map((u, i) => `<tr>
     <td class="pos">${i + 1}º</td><td>${esc(u.nome)}${eu && u.id === eu.id ? ' <span class="tag">você</span>' : ""}</td>
-    <td class="num"><b>${u.postados}</b></td>
+    <td class="num"><b>${u.postados}</b></td><td class="num">${u.aproveitados ?? 0}</td>
     <td><div class="barra"><span style="width:${(u.postados / max * 100).toFixed(1)}%"></span></div></td></tr>`).join("")
-    : `<tr><td colspan="4" class="sub">Sem dados ainda.</td></tr>`;
+    : `<tr><td colspan="5" class="sub">Sem dados ainda.</td></tr>`;
 }
 
 function renderTudo() { renderPlats(); renderLista(); renderUsuarios(); renderRanking(); }
@@ -921,14 +1015,42 @@ $("btnPostar").addEventListener("click", async () => {
   } finally { $("btnPostar").disabled = false; }
 });
 
+const COPIA_SERVE = new Set(["registrado", "ja_copiado", "proprio"]);
+const MSG_COPIA = {
+  registrado: c => `${c} copiado e registrado como sua cópia.`,
+  ja_copiado: c => `${c} copiado de novo. Você já tinha pegado esse código, então não gastou outra cópia.`,
+  proprio: c => `${c} copiado. O código é seu, então não conta como cópia.`,
+  esgotado: () => "Esse código acabou de esgotar (3 pessoas já pegaram). Nada foi copiado.",
+  expirado: () => "Esse código venceu (passou de 48 horas). Nada foi copiado.",
+  inexistente: () => "Esse código foi apagado pelo autor. Nada foi copiado.",
+};
+
 $("lista").addEventListener("click", async e => {
   const bc = e.target.closest("[data-copiar]"), ba = e.target.closest("[data-apagar]");
   if (bc) {
-    const c = codigos.find(x => String(x.id) === bc.dataset.copiar); if (!c) return;
-    const ok = await copiarTexto(c.codigo);
-    bc.textContent = ok ? "Copiado" : "Selecione";
-    setTimeout(() => { bc.textContent = "Copiar"; }, 1500);
-    try { await loja.pegar(c.id); await atualizar(); } catch (err) { console.error(err); mostrarFaixaErro(err); }
+    if (bc.disabled) return;
+    const msg = $("msgLista");
+    msg.className = "msg"; msg.textContent = "";
+    bc.disabled = true; bc.textContent = "…";
+    // o banco decide; o texto só vai para a área de transferência se o código ainda servir
+    const pedido = loja.copiarV2(Number(bc.dataset.copiar));
+    const res = await copiarDepois(pedido.then(r => COPIA_SERVE.has(r.status) ? r.codigo : null, () => null));
+    let r;
+    try { r = await pedido; }
+    catch (err) {
+      console.error(err); msg.className = "msg bad"; msg.textContent = mensagemDeErro(err);
+      bc.disabled = false; bc.textContent = "Copiar"; return;
+    }
+    const serve = COPIA_SERVE.has(r.status);
+    msg.className = serve ? "msg ok" : "msg bad";
+    msg.textContent = MSG_COPIA[r.status](r.codigo);
+    if (serve && res !== "ok") {
+      msg.textContent += " A cópia automática não funcionou neste navegador: copie abaixo.";
+      mostrarCopiaManual(msg, r.codigo);
+    }
+    bc.textContent = serve ? (res === "ok" ? "Copiado" : "Abaixo") : "Indisponível";
+    setTimeout(() => { bc.disabled = false; bc.textContent = "Copiar"; }, 1500);
+    atualizar();
   }
   if (ba) {
     if (ba.dataset.confirma !== "1") { ba.dataset.confirma = "1"; ba.textContent = "Apagar?"; setTimeout(() => { ba.dataset.confirma = ""; ba.textContent = "✕"; }, 2500); return; }
@@ -936,26 +1058,85 @@ $("lista").addEventListener("click", async e => {
   }
 });
 
+const dataCurta = iso => new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const textoDoLote = r => r.codigos.map(c => c.codigo).join("\n");   // um por linha, sem quebra no fim
+
+// mostra o lote (novo ou recuperado) na caixa; res = resultado da cópia automática
+function mostrarLote(r, res, recuperado) {
+  const msg = $("msgLote");
+  const texto = textoDoLote(r);
+  $("saidaLote").value = texto;
+  $("saidaLote").rows = Math.min(12, Math.max(3, r.registrados));
+  $("rotuloLote").textContent = recuperado
+    ? `Lote de ${dataCurta(r.criado_em)} (${r.plataforma}) — um por linha`
+    : "Códigos registrados (um por linha)";
+  $("resultadoLote").hidden = false;
+  const qtd = `${r.registrados} ${r.registrados === 1 ? "código" : "códigos"}`;
+  let t = recuperado
+    ? (res === "ok" ? `Lote recuperado e copiado de novo: ${qtd}. Nenhuma cópia nova foi registrada.`
+                    : `Lote recuperado: ${qtd}. Nenhuma cópia nova foi registrada`)
+    : `${r.registrados} de ${r.pedidos} ${r.pedidos === 1 ? "código registrado" : "códigos registrados"}` +
+      (r.registrados < r.pedidos ? " (não havia mais disponíveis agora)" : "") +
+      (res === "ok" ? " e copiados, um por linha." : "");
+  if (res === "ok") { msg.className = "msg ok"; }
+  else {
+    t += ". A cópia automática não funcionou neste navegador: use “Copiar de novo” ou copie da caixa abaixo (não gasta cópias).";
+    msg.className = "msg bad";
+    $("saidaLote").focus(); $("saidaLote").select();
+  }
+  msg.textContent = t;
+}
+
 $("btnLote").addEventListener("click", async () => {
   const msg = $("msgLote"); msg.className = "msg";
-  const n = Math.max(1, Math.min(200, parseInt($("inQtdLote").value) || 0));
-  const escolha = codigos
-    .filter(c => c.plataforma === plataforma && ativo(c) && c.autorId !== eu.id && !c.copiadoPor.includes(eu.id))
-    .sort((a, b) => a.criadoEm - b.criadoEm)
-    .slice(0, n);
-  if (!escolha.length) { msg.className = "msg bad"; msg.textContent = `Não há códigos de ${plataforma} para você pegar agora.`; return; }
-  const texto = "{" + escolha.map(c => c.codigo).join("\n") + "}";
-  const ok = await copiarTexto(texto);
-  $("saidaLote").hidden = false; $("saidaLote").value = texto;
-  $("btnLote").disabled = true;
-  let contou = 0;
-  for (const c of escolha) { try { if (await loja.pegar(c.id)) contou++; } catch (err) { console.error(err); } }
-  $("btnLote").disabled = false;
-  msg.className = "msg ok";
-  msg.textContent = `${ok ? "Lista copiada" : "Lista pronta abaixo (copie manualmente)"}: ${escolha.length} ${escolha.length === 1 ? "código" : "códigos"}` +
-    (escolha.length < n ? ` (só havia ${escolha.length})` : "") +
-    (contou < escolha.length ? `. ${escolha.length - contou} acabaram de ser pegos por outra pessoa.` : ".");
-  await atualizar();
+  const n = Number($("inQtdLote").value);
+  if (!Number.isInteger(n) || n < 1 || n > 200) { msg.className = "msg bad"; msg.textContent = MENSAGENS.quantidade_invalida; return; }
+  const bt = $("btnLote");
+  bt.disabled = true; msg.textContent = `Registrando até ${n} ${n === 1 ? "código" : "códigos"} de ${plataforma}…`;
+  const pedido = loja.pegarLote(plataforma, n);
+  const res = await copiarDepois(pedido.then(r => r.registrados ? textoDoLote(r) : null, () => null));
+  let r;
+  try { r = await pedido; }
+  catch (err) { console.error(err); msg.className = "msg bad"; msg.textContent = mensagemDeErro(err); bt.disabled = false; return; }
+  bt.disabled = false;
+  if (!r.registrados) {
+    $("resultadoLote").hidden = true;
+    msg.className = "msg bad";
+    msg.textContent = `Não há códigos de ${plataforma} disponíveis para você agora. Nada foi registrado nem copiado.`;
+  } else {
+    mostrarLote(r, res, false);
+  }
+  atualizar();
+  if ($("meusLotes").open) carregarMeusLotes();
+});
+
+$("btnCopiarDeNovo").addEventListener("click", async () => {
+  const ok = await copiarAgora($("saidaLote").value);
+  const msg = $("msgLote");
+  msg.className = ok ? "msg ok" : "msg bad";
+  msg.textContent = ok ? "Copiado de novo (nenhuma cópia nova foi registrada)." : "Não deu para copiar automaticamente: os códigos estão selecionados na caixa, use Ctrl+C.";
+  if (!ok) { $("saidaLote").focus(); $("saidaLote").select(); }
+});
+
+async function carregarMeusLotes() {
+  const alvo = $("listaMeusLotes");
+  alvo.innerHTML = `<p class="sub" style="font-size:13px">Carregando…</p>`;
+  try {
+    const l = await loja.meusLotes();
+    alvo.innerHTML = l.length ? l.map(x => `<div class="lote-item"><span>${dataCurta(x.criado_em)} · <b>${esc(x.plataforma)}</b> · ${x.registrados} ${x.registrados === 1 ? "código" : "códigos"}</span>
+      <button class="btn sec min" type="button" data-lote="${esc(x.lote_id)}">Recuperar</button></div>`).join("")
+      : `<p class="sub" style="font-size:13px">Nenhum lote nas últimas 48 horas.</p>`;
+  } catch (err) { console.error(err); alvo.innerHTML = `<p class="msg bad">${esc(mensagemDeErro(err))}</p>`; }
+}
+$("meusLotes").addEventListener("toggle", () => { if ($("meusLotes").open) carregarMeusLotes(); });
+$("listaMeusLotes").addEventListener("click", async e => {
+  const b = e.target.closest("[data-lote]"); if (!b || b.disabled) return;
+  b.disabled = true;
+  const pedido = loja.recuperarLote(b.dataset.lote);
+  const res = await copiarDepois(pedido.then(r => r.registrados ? textoDoLote(r) : null, () => null));
+  try { const r = await pedido; mostrarLote(r, r.registrados ? res : "nada", true); }
+  catch (err) { console.error(err); $("msgLote").className = "msg bad"; $("msgLote").textContent = mensagemDeErro(err); }
+  finally { b.disabled = false; }
 });
 
 /* ---------- botões gerais ---------- */

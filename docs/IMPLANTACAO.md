@@ -146,3 +146,84 @@ Se, por qualquer motivo, os dados de `usuarios`, `codigos` ou `copias` estiverem
 - Os limites que existem são os dos planos gratuitos. Confira os valores atuais nos painéis:
   - **Clerk:** a instância de desenvolvimento tem limite de usuários e mostra o selo "Development mode". Para crescer, migre para a instância de produção, que já pode usar o domínio `jaogulozin.com.br`.
   - **Supabase:** 500 MB de banco, e o projeto pausa depois de 7 dias sem uso.
+
+---
+
+# Migração 002 (cópias e ranking)
+
+Aplica `migrations/002_copias_ranking.sql`, que cria a cópia individual com motivo, a cópia em lote transacional, a recuperação de lotes e a estatística "aproveitados". Leva uns 10 minutos.
+
+## O que muda para quem usa
+
+| Ação | Antes | Depois |
+|---|---|---|
+| Copiar um código | copiava sempre, mesmo sem registrar | o banco decide primeiro: registrado, já copiado ou próprio **copiam**; esgotado, vencido ou apagado **não copiam** e mostram o motivo |
+| Copiar lista | `{a b c}`, montada no navegador e registrada uma a uma | **um código por linha**, sem quebra no fim, registrada **numa transação só**; só vem o que foi realmente registrado |
+| Cópia automática falhou | lista perdida | caixa com os códigos + "Copiar de novo" + "Meus lotes das últimas 48 h", sem gastar cópias |
+| Ranking | postados | postados (mesma ordem) + **Aproveitados** |
+
+As regras não mudam: 48 horas, até 3 pessoas distintas, uma cópia por pessoa, e o autor não conta.
+
+## Compatibilidade entre site e banco
+
+| Site \ Banco | Banco só com a 001 | Banco com a 002 |
+|---|---|---|
+| **Site atual (`main`)** | normal | normal (`copiar_codigo()` e o ranking antigo continuam funcionando) |
+| **Site novo (`fase2-copias-ranking`)** | ao copiar, mostra "o banco ainda não foi atualizado" | normal |
+
+Ordem recomendada: **migração primeiro, merge depois**. Nesse intervalo o site atual continua igual.
+
+## Passo a passo
+
+1. **Snapshot de dados** (é só uma cópia das linhas; não é um backup completo, porque não leva chaves, índices, políticas nem funções):
+   ```sql
+   create schema if not exists backup;
+   create table backup.copias_antes_002 as select * from public.copias;
+   select count(*) from backup.copias_antes_002;
+   ```
+2. **Aplicar:** cole `migrations/002_copias_ranking.sql` inteiro no SQL Editor e clique em **Run**.
+   - A 002 **não depende** de o editor manter uma transação ou sessão entre os comandos. Ela não usa tabela temporária, todo comando pode ser repetido sem efeito duplicado, e o resultado (primeira aplicação ou reaplicação) é lido de `public.migracoes`. Isso foi testado executando cada um dos 20 comandos numa conexão separada (`tests/08_editor_separado.sh`).
+   - **Se aparecer um erro no meio:** anote a mensagem, corrija a causa se houver e **rode o arquivo inteiro de novo**. Os comandos que já tinham passado são refeitos sem efeito duplicado, e a mensagem final só aparece quando tudo terminou.
+   - Esperado: `MIGRAÇÃO 002 APLICADA: N cópia(s) existente(s) preservada(s)`.
+   - Se aparecer `A migração 001_membros precisa estar aplicada`, nada foi feito: a 001 não está ativa.
+   - Se aparecer `MIGRAÇÃO 002 REAPLICADA (execução nº N)`, ela já tinha rodado antes. Isso é seguro: funções e ranking são atualizados e nenhuma cópia é alterada.
+   - Se a mensagem final não aparecer, a execução não chegou ao fim: rode o arquivo inteiro de novo.
+3. **Verificar (só leitura):**
+   ```sql
+   select versao, aplicacoes, revertida_em from public.migracoes order by versao;
+   select count(*) from public.copias;   -- igual ao snapshot
+   select proname from pg_proc where pronamespace = 'public'::regnamespace and proname in
+     ('copiar_codigo_v2', 'pegar_lote', 'recuperar_lote', 'meus_lotes', 'resumo_lote');   -- 5 linhas
+   ```
+   Também rode `tests/verificar_supabase_anon.sh`, que agora inclui as funções novas e deve terminar em "VISITANTE ANÔNIMO NÃO ACESSA NADA".
+4. **Merge** do PR `fase2-copias-ranking → main`. Espere 1 a 2 minutos e recarregue com **Ctrl+F5**.
+5. **Testes reais** (veja a lista abaixo).
+
+## Testes reais depois do merge
+
+| # | Teste | Esperado |
+|---|---|---|
+| 1 | Copiar um código de outra pessoa | "copiado e registrado"; o contador do código sobe |
+| 2 | Copiar o mesmo código de novo | "copiado de novo… não gastou outra cópia"; o contador não muda |
+| 3 | Copiar um código seu | "o código é seu…"; o contador não muda |
+| 4 | "Copiar lista" com N = 3 | até 3 códigos, um por linha, os que vencem antes primeiro |
+| 5 | Colar no `comprador_cupons.py` | ele lê todos os códigos da lista |
+| 6 | "Copiar lista" sem nada disponível | "Não há códigos… Nada foi registrado nem copiado" |
+| 7 | "Meus lotes das últimas 48 h" → Recuperar | copia os mesmos códigos; os contadores não mudam |
+| 8 | Duas pessoas pedindo lote ao mesmo tempo | nenhum código passa de 3/3; ninguém recebe código repetido |
+| 9 | No celular (Safari/iPhone e Chrome/Android) | copia direto ou mostra a caixa de cópia manual |
+| 10 | Ranking | coluna "Aproveitados"; a ordem continua por postados |
+
+## Reverter
+
+Faça nesta ordem:
+
+1. **Site:** dê **Revert** no PR da Fase 2 e faça o merge do revert.
+2. **Banco:** rode `migrations/002_copias_ranking_down.sql`. Ele remove as funções novas e volta o ranking da 001. **Nenhuma cópia é apagada**; a coluna `copias.lote_id` fica guardada (a limpeza opcional está no fim do arquivo).
+3. **Conferir:** `select count(*) from public.copias;` tem que bater com o snapshot.
+
+A 001 só pode ser revertida **depois** da 002: o `001_membros_down.sql` recusa enquanto a 002 estiver ativa.
+
+## Observação sobre a 001 no SQL Editor
+
+A `001_membros.sql` (já aplicada em produção) ainda usa uma tabela temporária (`_m001`) **só na mensagem final**. Quando o editor executa comando a comando, todos os comandos anteriores são aplicados normalmente e apenas essa mensagem falha com `relation "_m001" does not exist`. O registro em `public.migracoes` é gravado **antes** dela, então o banco fica correto. Para conferir depois de uma reaplicação da 001, use as consultas do passo 3 da 001 em vez da mensagem.

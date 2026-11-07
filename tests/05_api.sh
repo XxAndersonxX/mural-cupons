@@ -30,6 +30,7 @@ $P -f tests/00_simular_supabase.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err";
 $P -c "grant anon, authenticated to authenticator" >/dev/null
 $P -f supabase.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/001_membros.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
+$P -f migrations/002_copias_ranking.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 
 # um usuário de cada tipo + um código
 $P >/dev/null <<'SQL'
@@ -139,6 +140,30 @@ for perfil in anon estranho pendente rejeitado suspenso membro admin; do
       confere $perfil POST "/rpc/copiar_codigo" "{\"p_id\":$ID}" '^400 .*acesso_negado'
       confere $perfil POST "/rpc/apagar_codigo" "{\"p_id\":$ID}" '^400 .*acesso_negado' ;;
   esac
+  # fase 2: cópia com motivo, lote, recuperação
+  case $perfil in
+    anon)
+      confere $perfil POST "/rpc/copiar_codigo_v2" "{\"p_id\":$ID}" '^401 .*42501'
+      confere $perfil POST "/rpc/pegar_lote" '{"p_plataforma":"777","p_quantidade":1}' '^401 .*42501'
+      confere $perfil POST "/rpc/recuperar_lote" '{}' '^401 .*42501'
+      confere $perfil POST "/rpc/meus_lotes" '{}' '^401 .*42501' ;;
+    membro)
+      confere $perfil POST "/rpc/pegar_lote" '{"p_plataforma":"777","p_quantidade":5}' '^200 \{.*"registrados" ?: ?1.*"APICOD1"'
+      confere $perfil POST "/rpc/copiar_codigo_v2" "{\"p_id\":$ID}" '^200 \{"status" ?: ?"ja_copiado", ?"codigo" ?: ?"APICOD1"\}'
+      confere $perfil POST "/rpc/recuperar_lote" '{}' '^200 \{.*"APICOD1"'
+      confere $perfil POST "/rpc/meus_lotes" '{}' '^200 \[\{"lote_id"'
+      confere $perfil GET  "/ranking?select=nome,aproveitados&nome=eq.admin1" "" '^200 \[\{"nome":"admin1","aproveitados":1\}\]' ;;
+    admin)
+      confere $perfil POST "/rpc/copiar_codigo_v2" "{\"p_id\":$ID}" '^200 \{"status" ?: ?"proprio"' ;;
+    *)
+      confere $perfil POST "/rpc/copiar_codigo_v2" "{\"p_id\":$ID}" '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/pegar_lote" '{"p_plataforma":"777","p_quantidade":1}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/recuperar_lote" '{}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/meus_lotes" '{}' '^400 .*acesso_negado' ;;
+  esac
+  confere $perfil POST "/rpc/resumo_lote" '{"p_lote":"00000000-0000-0000-0000-000000000000","p_pedidos":1}' '^(401|403) .*42501'
+  confere $perfil PATCH "/copias?usuario_id=eq.u_membro" '{"lote_id":null}' '^(401|403) .*42501'
+
   [ $perfil != admin ] && [ $perfil != anon ] && \
     confere $perfil POST "/rpc/admin_alterar_acesso" '{"p_alvo":"u_pend","p_acao":"aprovar"}' '^400 .*nao_admin'
 done
