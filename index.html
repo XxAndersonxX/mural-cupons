@@ -352,7 +352,7 @@ const CODIGOS_CONHECIDOS = [
   "config_incompleta", "supabase_indisponivel", "clerk_indisponivel", "conta_sem_username",
   "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
   "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
-  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado", "lote_ocupado",
+  "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado", "lote_ocupado", "lista_incompleta",
 ];
 const MENSAGENS = {
   config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
@@ -373,6 +373,7 @@ const MENSAGENS = {
   usuario_inexistente: "Esse usuário não existe mais. A lista foi atualizada.",
   maximo_200_por_vez: "Máximo de 200 códigos por vez.",
   quantidade_invalida: "Escolha uma quantidade entre 1 e 200.",
+  lista_incompleta: "Não foi possível carregar a lista completa agora (a conexão falhou no meio). A tela continua mostrando a última lista completa. Toque em “Tentar de novo”.",
   lote_ocupado: "Muita gente pegando códigos desta plataforma agora. Nada foi registrado: tente de novo em alguns segundos.",
   lote_nao_encontrado: "Esse lote não está mais disponível (só dá para recuperar lotes seus das últimas 48 horas).",
   banco_desatualizado: "O site foi atualizado, mas o banco de dados ainda não. Avise um administrador (docs/IMPLANTACAO.md) e tente de novo em alguns minutos.",
@@ -427,6 +428,44 @@ function criarLojaReal() {
     return data;
   };
 
+  // Lê TODAS as linhas de uma tabela/view, em páginas, sem depender do limite de
+  // linhas por resposta do servidor (no Supabase, 1000 por padrão).
+  //  * teto: o maior id visível no início; códigos novos (id maior) ficam para a
+  //    próxima atualização e a leitura nunca "corre atrás" de publicações novas
+  //  * cursor: id > último recebido, em ordem de id; exclusões/expirações no meio
+  //    não fazem linhas pularem de página (o que aconteceria com offset)
+  //  * termina ao receber o próprio teto ou uma página vazia — nunca por "veio
+  //    menos que o pedido", porque o servidor pode limitar abaixo de PAGINA
+  //  * qualquer falha derruba a leitura inteira (nada parcial é devolvido)
+  const PAGINA = 500, MAX_PAGINAS = 2000;
+  const falhaDeLeitura = e => {
+    const c = codigoDoErro(e);
+    if (c !== "sem_conexao" && c !== "desconhecido") return e;   // sessão, permissão etc.: tratamento de sempre
+    const f = erroCom("lista_incompleta"); f.causa = e; return f;
+  };
+  async function lerTudo(tabela, colunas) {
+    const topo = await sb.from(tabela).select("id").order("id", { ascending: false }).limit(1);
+    if (topo.error) throw falhaDeLeitura(topo.error);
+    if (!topo.data.length) return [];
+    const teto = topo.data[0].id;
+    const linhas = [], vistos = new Set();
+    let cursor = null;
+    for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+      let q = sb.from(tabela).select(colunas).lte("id", teto).order("id", { ascending: true }).limit(PAGINA);
+      if (cursor !== null) q = q.gt("id", cursor);
+      const { data, error } = await q;
+      if (error) throw falhaDeLeitura(error);
+      if (!data.length) return linhas;
+      for (const r of data) {
+        if (vistos.has(r.id)) throw erroCom("lista_incompleta");   // não deveria acontecer: recusa em vez de duplicar
+        vistos.add(r.id); linhas.push(r);
+      }
+      cursor = data[data.length - 1].id;
+      if (cursor === teto) return linhas;
+    }
+    throw erroCom("lista_incompleta");
+  }
+
   return {
     modo: "real",
     async iniciar(aoEntrar, mostrarLogin) {
@@ -480,13 +519,11 @@ function criarLojaReal() {
       return { ...data, acesso: temAcesso(data) };
     },
     async carregar() {
-      const [a, b] = await Promise.all([sb.from("codigos_ativos").select("*"), sb.from("ranking").select("*")]);
-      if (a.error) throw a.error;
-      if (b.error) throw b.error;
+      const [a, b] = await Promise.all([lerTudo("codigos_ativos", "*"), lerTudo("ranking", "*")]);
       return {
-        codigos: a.data.map(c => ({ id: c.id, plataforma: c.plataforma, codigo: c.codigo, autorId: c.autor_id, autor: c.autor,
+        codigos: a.map(c => ({ id: c.id, plataforma: c.plataforma, codigo: c.codigo, autorId: c.autor_id, autor: c.autor,
                                     criadoEm: Date.parse(c.criado_em), copias: c.copias, copiadoPor: c.copiado_por || [] })),
-        usuarios: b.data.map(u => ({ id: u.id, nome: u.nome, postados: u.postados, copiados: u.copiados, ativos: u.ativos,
+        usuarios: b.map(u => ({ id: u.id, nome: u.nome, postados: u.postados, copiados: u.copiados, ativos: u.ativos,
                                      aproveitados: u.aproveitados ?? 0, criadoEm: Date.parse(u.criado_em) })),
       };
     },
@@ -497,9 +534,9 @@ function criarLojaReal() {
     meusLotes: () => rpc("meus_lotes"),
     apagar: id => rpc("apagar_codigo", { p_id: id }),
     async adminUsuarios() {
-      const { data, error } = await sb.from("usuarios").select("id,nome,papel,situacao,criado_em,atualizado_em").order("criado_em");
-      if (error) throw error;
-      return data;
+      // mesma ordem de antes (por criado_em), agora sem o corte de linhas
+      return (await lerTudo("usuarios", "id,nome,papel,situacao,criado_em,atualizado_em"))
+        .sort((a, b) => Date.parse(a.criado_em) - Date.parse(b.criado_em));
     },
     async adminEventos() {
       const { data, error } = await sb.from("eventos_acesso").select("*").order("criado_em", { ascending: false }).limit(30);
@@ -952,10 +989,22 @@ $("btnConfirmar").addEventListener("click", async () => {
 });
 
 /* ---------- ciclo de atualização ---------- */
-let carregando = false, iniciado = false;
-async function atualizar() {
-  if (!eu || carregando) return;
-  carregando = true;
+// Uma carga por vez. Pedido feito durante uma carga (ex.: depois de postar ou
+// copiar) não é descartado: marca "de novo" e recebe a mesma promessa, que só
+// termina depois de uma carga iniciada APÓS o pedido. Vários pedidos durante
+// a mesma carga geram no máximo uma carga extra.
+let cargaEmCurso = null, cargaDeNovo = false, iniciado = false;
+function atualizar() {
+  if (!eu) return Promise.resolve();
+  if (cargaEmCurso) { cargaDeNovo = true; return cargaEmCurso; }
+  cargaEmCurso = (async () => {
+    try {
+      do { cargaDeNovo = false; await umaAtualizacao(); } while (cargaDeNovo && eu);
+    } finally { cargaEmCurso = null; }
+  })();
+  return cargaEmCurso;
+}
+async function umaAtualizacao() {
   try {
     const p = await loja.estadoProprio();
     eu = { ...eu, ...p };
@@ -972,7 +1021,7 @@ async function atualizar() {
     console.error(e);
     if (codigoDoErro(e) === "nao_logado") { mostrarLogin({ texto: "Sua sessão terminou.", erro: e }); return; }
     mostrarFaixaErro(e);
-  } finally { carregando = false; }
+  }
 }
 
 function aoEntrar(perfil) {
