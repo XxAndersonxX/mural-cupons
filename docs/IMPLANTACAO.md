@@ -181,10 +181,13 @@ Ordem recomendada: **migração primeiro, merge depois**. Nesse intervalo o site
    create table backup.copias_antes_002 as select * from public.copias;
    select count(*) from backup.copias_antes_002;
    ```
-2. **Aplicar:** cole `migrations/002_copias_ranking.sql` inteiro no SQL Editor e clique em **Run**. Ele roda numa transação única.
+2. **Aplicar:** cole `migrations/002_copias_ranking.sql` inteiro no SQL Editor e clique em **Run**.
+   - A 002 **não depende** de o editor manter uma transação ou sessão entre os comandos. Ela não usa tabela temporária, todo comando pode ser repetido sem efeito duplicado, e o resultado (primeira aplicação ou reaplicação) é lido de `public.migracoes`. Isso foi testado executando cada um dos 20 comandos numa conexão separada (`tests/08_editor_separado.sh`).
+   - **Se aparecer um erro no meio:** anote a mensagem, corrija a causa se houver e **rode o arquivo inteiro de novo**. Os comandos que já tinham passado são refeitos sem efeito duplicado, e a mensagem final só aparece quando tudo terminou.
    - Esperado: `MIGRAÇÃO 002 APLICADA: N cópia(s) existente(s) preservada(s)`.
    - Se aparecer `A migração 001_membros precisa estar aplicada`, nada foi feito: a 001 não está ativa.
-   - Se aparecer `MIGRAÇÃO 002 REAPLICADA`, ela já tinha rodado antes. Isso é seguro: funções e ranking são atualizados e nenhuma cópia é alterada.
+   - Se aparecer `MIGRAÇÃO 002 REAPLICADA (execução nº N)`, ela já tinha rodado antes. Isso é seguro: funções e ranking são atualizados e nenhuma cópia é alterada.
+   - Se a mensagem final não aparecer, a execução não chegou ao fim: rode o arquivo inteiro de novo.
 3. **Verificar (só leitura):**
    ```sql
    select versao, aplicacoes, revertida_em from public.migracoes order by versao;
@@ -220,3 +223,7 @@ Faça nesta ordem:
 3. **Conferir:** `select count(*) from public.copias;` tem que bater com o snapshot.
 
 A 001 só pode ser revertida **depois** da 002: o `001_membros_down.sql` recusa enquanto a 002 estiver ativa.
+
+## Observação sobre a 001 no SQL Editor
+
+A `001_membros.sql` (já aplicada em produção) ainda usa uma tabela temporária (`_m001`) **só na mensagem final**. Quando o editor executa comando a comando, todos os comandos anteriores são aplicados normalmente e apenas essa mensagem falha com `relation "_m001" does not exist`. O registro em `public.migracoes` é gravado **antes** dela, então o banco fica correto. Para conferir depois de uma reaplicação da 001, use as consultas do passo 3 da 001 em vez da mensagem.

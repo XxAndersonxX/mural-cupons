@@ -19,6 +19,12 @@
 --   * copiar_codigo() antiga continua existindo (compatibilidade)
 --
 -- Como aplicar e reverter: docs/IMPLANTACAO.md, seção "Migração 002".
+--
+-- Seguro no SQL Editor do Supabase mesmo que ele execute cada comando numa
+-- transação/conexão separada: não usa tabela temporária nem estado de sessão,
+-- e todo comando é idempotente (rodar o arquivo de novo depois de uma falha
+-- no meio completa o que faltou). A primeira aplicação x reaplicação é lida
+-- da tabela persistente public.migracoes.
 -- =====================================================================
 begin;
 
@@ -31,9 +37,6 @@ begin
     raise exception 'A migração 001_membros precisa estar aplicada antes da 002.';
   end if;
 end $$;
-
-create temporary table _m002 on commit drop as
-select exists (select 1 from public.migracoes where versao = '002_copias_ranking') as ja_aplicada;
 
 -- ---------------------------------------------------------------------
 -- 1. Identificador de lote nas cópias (aditivo)
@@ -225,12 +228,16 @@ insert into public.migracoes (versao) values ('002_copias_ranking')
 on conflict (versao) do update
   set ultima_aplicacao = now(), aplicacoes = public.migracoes.aplicacoes + 1, revertida_em = null;
 
+-- O registro acima é o último passo da migração: se ele existe, tudo antes
+-- dele já foi aplicado. aplicacoes = 1 -> primeira vez; > 1 -> reaplicação.
 do $$
+declare
+  v_aplicacoes int := (select aplicacoes from public.migracoes where versao = '002_copias_ranking');
 begin
-  if (select ja_aplicada from _m002) then
-    raise notice 'MIGRAÇÃO 002 REAPLICADA: funções e ranking atualizados; nenhuma cópia alterada.';
-  else
+  if v_aplicacoes = 1 then
     raise notice 'MIGRAÇÃO 002 APLICADA: % cópia(s) existente(s) preservada(s) (sem lote).', (select count(*) from public.copias);
+  else
+    raise notice 'MIGRAÇÃO 002 REAPLICADA (execução nº %): funções e ranking atualizados; nenhuma cópia alterada.', v_aplicacoes;
   end if;
 end $$;
 

@@ -129,6 +129,10 @@ sql "reaplicar 002 depois do down"          migrations/002_copias_ranking.sql
 grep -q "MIGRAÇÃO 002 REAPLICADA" "$LOG" || { ETAPA="002 após down"; echo "esperava 002 REAPLICADA"; false; }
 sql "permissões finais"                     tests/04_permissoes.sql | tail -n 1
 
+ETAPA="execução comando a comando (SQL Editor)"; echo "== execução comando a comando, cada um numa conexão (SQL Editor)"
+PSQL_BASE="$PSQL_BASE" tests/08_editor_separado.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+grep -E "^ok  [0-9]|PASSARAM" "$LOG"
+
 if [ -n "${POSTGREST:-}" ]; then
   ETAPA="API (PostgREST)"; echo "== permissões pela API (PostgREST)"
   PSQL_BASE="$PSQL_BASE" tests/05_api.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
