@@ -68,6 +68,7 @@ h1,h2{font-family:var(--display);font-weight:800;letter-spacing:-.02em;margin:0;
 h1{font-size:28px}
 h2{font-size:18px}
 .sub{color:var(--muted);margin:2px 0 0}
+.disp{font-size:13px}.disp b{color:var(--ink);font-variant-numeric:tabular-nums}
 .painel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
 .linha{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .grade2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
@@ -241,7 +242,10 @@ details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
 
       <div>
         <div class="linha" style="justify-content:space-between;margin-bottom:10px">
-          <h2 id="tituloLista">Códigos</h2>
+          <div>
+            <h2 id="tituloLista">Códigos</h2>
+            <p class="sub disp" id="dispLista" hidden>Disponíveis para você: <b id="dispQtd">0</b></p>
+          </div>
           <span class="sub" style="font-size:13px">Os que vencem antes aparecem primeiro; os seus ficam no fim</span>
         </div>
         <p class="msg" id="msgLista" role="status"></p>
@@ -663,6 +667,12 @@ try { plataforma = localStorage.getItem("mural-plat") || plataforma; } catch {}
 if (!PLATAFORMAS.includes(plataforma)) plataforma = PLATAFORMAS[0];
 
 const ativo = c => c.copias < MAX_COPIAS && c.criadoEm + VALIDADE_MS > Date.now();
+// O que o usuário logado ainda pode copiar: as regras da copiar_codigo_v2() e da
+// pegar_lote() (ativo = dentro das 48 h e menos de 3 cópias; não é dele; ele
+// ainda não pegou), pelo ID autenticado. Conta sobre a última lista carregada:
+// é informação, não reserva — outros podem copiar antes.
+const disponivelPara = (c, idLogado) => ativo(c) && c.autorId !== idLogado && !c.copiadoPor.includes(idLogado);
+let listaCarregada = false;   // só mostra o contador depois de uma carga completa
 
 function restante(c) {
   const ms = c.criadoEm + VALIDADE_MS - Date.now();
@@ -787,6 +797,9 @@ function renderPlats() {
   }).join("");
   $("nomePlatPost").textContent = plataforma;
   $("tituloLista").textContent = `Códigos ${plataforma}`;
+  const mostrar = !!(eu && eu.acesso && eu.id && listaCarregada);
+  $("dispLista").hidden = !mostrar;
+  if (mostrar) $("dispQtd").textContent = codigos.filter(c => c.plataforma === plataforma && disponivelPara(c, eu.id)).length;
 }
 
 // Ordem só de exibição (não muda nada no banco): códigos dos outros primeiro,
@@ -965,6 +978,7 @@ async function atualizar() {
     $("telaLogin").hidden = true;
     rota();
     ({ codigos, usuarios } = await loja.carregar());
+    listaCarregada = true;
     renderTudo();
     mostrarFaixaErro(null);
     if (eu.papel === "admin") await atualizarAdmin();
