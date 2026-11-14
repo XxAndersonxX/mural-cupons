@@ -228,6 +228,56 @@ A 001 só pode ser revertida **depois** da 002: o `001_membros_down.sql` recusa 
 
 A `001_membros.sql` (já aplicada em produção) ainda usa uma tabela temporária (`_m001`) **só na mensagem final**. Quando o editor executa comando a comando, todos os comandos anteriores são aplicados normalmente e apenas essa mensagem falha com `relation "_m001" does not exist`. O registro em `public.migracoes` é gravado **antes** dela, então o banco fica correto. Para conferir depois de uma reaplicação da 001, use as consultas do passo 3 da 001 em vez da mensagem.
 
+# Migração 005 (correção da exclusão de códigos — independente)
+
+Aplica `migrations/005_apagar_codigo_trava.sql`. Ela corrige uma condição de corrida em `apagar_codigo()` e **só depende da 001**: pode ser aplicada antes ou depois da 003/004. Não cria tabelas, não altera dados e não muda nenhuma outra função.
+
+## O problema
+
+A versão da 001 decidia tudo num único comando:
+
+```sql
+delete from codigos where id = p_id and autor_id = <eu>
+  and not exists (select 1 from copias where codigo_id = p_id);
+```
+
+No PostgreSQL (READ COMMITTED), esse `NOT EXISTS` enxerga a "foto" tirada no **início** do comando. Quando uma cópia está em andamento, a função de cópia já travou a linha do código (`FOR UPDATE`) e já inseriu em `copias`, mas ainda não confirmou. O `DELETE` então:
+
+1. espera a trava da linha;
+2. quando a cópia confirma, segue em frente com a foto antiga, que **não** tem a cópia;
+3. apaga o código, e o `ON DELETE CASCADE` de `copias` apaga junto a cópia que acabou de ser confirmada.
+
+Quem copiou fica com o código na área de transferência, mas a cópia some do histórico, do lote e do ranking.
+
+## A correção
+
+A função continua com o mesmo nome, parâmetros, retorno (`boolean`) e permissões. A diferença é que agora faz quatro comandos separados, e cada um tira uma foto nova:
+
+1. confere se quem pede é o autor; quem não é recebe `false` na hora, sem travar a linha de ninguém;
+2. trava a linha com `SELECT ... FOR UPDATE`, a **mesma** trava usada pelas cópias e pelo lote (se houver uma cópia em andamento, espera);
+3. com a trava, confere as cópias num comando novo, que já enxerga a cópia recém-confirmada;
+4. só então apaga. Enquanto a trava é dela, nenhuma cópia pode ser registrada, porque o `FOR UPDATE` das cópias e a trava `FOR KEY SHARE` da chave estrangeira de `copias` esperam.
+
+## Implantação
+
+O site não muda, então a ordem em relação ao site não importa.
+
+1. No SQL Editor, cole `migrations/005_apagar_codigo_trava.sql` inteiro e clique em **Run**. A mensagem esperada é `MIGRAÇÃO 005 APLICADA: …`. Testada também comando a comando e interrompida em cada ponto.
+2. Para conferir:
+   ```sql
+   select versao, aplicacoes, revertida_em from public.migracoes order by versao;
+   select prosrc ilike '%for update%' as corrigida from pg_proc where proname = 'apagar_codigo';  -- true
+   ```
+3. Teste real: o autor apaga um código próprio sem cópias (some da lista); tentar apagar um código que alguém já copiou não apaga nada.
+
+## Reverter
+
+Rode `migrations/005_apagar_codigo_trava_down.sql`. A função volta a ser **idêntica** à da 001 (o teste compara o texto), **com a condição de corrida de volta**, e nenhum dado é alterado.
+
+Proteções:
+- Reaplicar a 001 ou rodar o down da 001 é recusado enquanto a 005 estiver ativa.
+- Com a 002 ativa, reaplicar a 001 já falhava antes, em `cannot drop columns from view`. É um comportamento antigo e seguro: tudo roda numa transação e nada é aplicado.
+
 # Migração 003 (distribuição híbrida do lote)
 
 Aplica `migrations/003_distribuicao_hibrida.sql`. Ela troca **só o critério de escolha** da `pegar_lote()`: mesmo nome, mesmos parâmetros, mesmo formato de resposta e mesmas permissões. Não cria nem altera tabelas, colunas, views ou dados. Leva uns 5 minutos.

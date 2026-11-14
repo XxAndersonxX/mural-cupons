@@ -9,9 +9,13 @@
 -- =====================================================================
 begin;
 
--- a 002 depende da 001: ela precisa ser revertida primeiro
+-- a 002 depende da 001: ela precisa ser revertida primeiro (e a 005 também)
 do $$
 begin
+  if to_regclass('public.migracoes') is not null
+     and exists (select 1 from public.migracoes where versao = '005_apagar_codigo_trava' and revertida_em is null) then
+    raise exception 'Reverta a migração 005 (005_apagar_codigo_trava_down.sql) antes de reverter a 001.';
+  end if;
   if to_regclass('public.migracoes') is not null
      and exists (select 1 from public.migracoes where versao = '002_copias_ranking' and revertida_em is null) then
     raise exception 'Reverta a migração 002 (002_copias_ranking_down.sql) antes de reverter a 001.';
