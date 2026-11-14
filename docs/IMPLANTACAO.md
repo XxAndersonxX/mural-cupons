@@ -312,25 +312,32 @@ Aplica `migrations/004_codigos_invalidos.sql`. Ela é **aditiva**: não apaga ne
 
 ## Regra (conservadora)
 
-- **Relato:** fica ligado ao ID de quem relatou e vale uma vez por pessoa para cada publicação. Ele aponta para a publicação mais recente daquele código na plataforma escolhida. O autor não relata o próprio código.
-- **Relato qualificado:** é o de quem copiou aquela publicação pelo mural. Relatos de quem não copiou ficam registrados para o admin, mas não têm efeito automático.
-- **Por que exigir isso:** o comprador marca como "rejeitado" também o cupom que *aquela conta* já usou, o que não prova que ele seja inválido para todos.
-- **2 relatos qualificados de pessoas diferentes:** o código é **suspenso**. Sai da lista, do lote e das cópias. Não bloqueia republicar depois de 48 h.
-- **Admin confirma:** o código é desativado em todas as publicações daquela plataforma e fica **bloqueado** para republicação, mesmo depois de 48 h.
-- **Admin reverte:** desbloqueia, reativa e descarta os relatos antigos, para que não haja nova suspensão imediata.
-- **Desativação lógica:** nada é apagado. Cópias, lotes, a recuperação de lotes e o ranking histórico (postados e aproveitados) ficam iguais. A coluna "ativos" do ranking deixa de contar os desativados.
+**A qual publicação o relato se refere.** Quem relata cola só o texto do código, e o mesmo código pode ter sido republicado.
+- Copiou **exatamente uma** publicação desse código pelo mural: o relato vai para **ela**, mesmo que exista uma republicação mais nova. É o caso de colar o histórico do comprador.
+- Copiou **mais de uma** publicação do mesmo código: o relato fica marcado como "ambígua".
+- **Não copiou** nenhuma: fica marcado como "sem cópia".
+- Só o relato do primeiro caso, feito **até 72 h depois da cópia**, é **qualificado**. Os demais ficam registrados para o admin e **nunca** retiram nada sozinhos.
+
+**Por que tão conservador.** O comprador marca como "rejeitado" também o cupom que *aquela conta* já usou, ou que tem restrição de conta (ex.: só contas novas). Isso não prova que o cupom é inválido para todos.
+
+- **2 relatos qualificados de pessoas diferentes na mesma publicação:** ela é **suspensa** (sai da lista, do lote e das cópias). Isso não bloqueia republicar, e os relatos de uma publicação **nunca** contam para outra.
+- **Admin confirma uma publicação:** ela fica desativada como "confirmado inválido" e a combinação plataforma + código é **bloqueada**. A republicação é recusada e as outras publicações ainda ativas dessa combinação são desativadas "pelo bloqueio".
+- **Admin desbloqueia a combinação:** só libera republicar e reativa **apenas** o que foi desativado pelo bloqueio. Publicações suspensas por relatos ou confirmadas continuam desativadas.
+- **Admin reativa uma publicação:** reativa só aquela e descarta os relatos dela. Isso é recusado enquanto a combinação estiver bloqueada; desbloqueie antes.
+- **Auditoria:** toda mudança fica em `eventos_invalidos`, com publicação, estado anterior, quem fez (ou "automático") e motivo. Relatos descartados ficam guardados, com quem descartou.
+- **Desativação lógica:** nada é apagado. Cópias, lotes, a recuperação de lotes e o ranking histórico (postados e aproveitados) ficam iguais; a coluna "ativos" deixa de contar os desativados.
 
 ## O que muda no banco
 
 | Objeto | Mudança |
 |---|---|
-| `codigos` | colunas novas `desativado_em` e `desativacao` (`relatos`/`admin`), nulas para tudo que já existe |
+| `codigos` | colunas novas `desativado_em` e `desativacao` (`relatos`/`admin`/`bloqueio`), nulas para tudo que já existe |
 | `relatos_invalidos`, `codigos_bloqueados`, `eventos_invalidos` | tabelas novas; RLS ligado e **nenhum acesso direto** pela API |
 | `codigos_ativos` (view) | ignora desativados |
 | `copiar_codigo`, `copiar_codigo_v2` | recusam desativados (`false` / status novo `invalidado`) |
 | `pegar_lote` | uma condição a mais (ignora desativados); critério e travas da 003 iguais |
 | `postar_codigos` | recusa combinações bloqueadas e devolve a lista nova `bloqueados` |
-| `relatar_invalidos`, `admin_codigos_invalidos`, `admin_confirmar_invalido`, `admin_reverter_invalido` | funções novas |
+| `relatar_invalidos`, `admin_codigos_invalidos`, `admin_confirmar_invalido(publicação)`, `admin_desbloquear_codigo(plataforma, código)`, `admin_reativar_publicacao(publicação)` | funções novas |
 | 001, 002, 003 e `003_..._down` | só uma verificação no começo: recusam rodar enquanto a 004 estiver ativa (sobrescreveriam os filtros). Para quem não tem a 004, nada muda |
 
 ## Ordem de implantação: **site primeiro, migração depois**
@@ -352,7 +359,7 @@ Aplica `migrations/004_codigos_invalidos.sql`. Ela é **aditiva**: não apaga ne
    create table backup.copias_antes_004 as select * from public.copias;
    ```
 2. **Aplicar:** cole `migrations/004_codigos_invalidos.sql` inteiro no SQL Editor e clique em **Run**.
-   - Testado também com cada um dos 31 comandos numa conexão separada, e interrompido em cada ponto possível antes de completar de novo. Em nenhum ponto cópias, lote, publicação ou lista ficam sem permissão.
+   - Testado também com cada um dos comandos numa conexão separada, e interrompido em cada ponto possível antes de completar de novo. Em nenhum ponto cópias, lote, publicação ou lista ficam sem permissão.
    - Esperado: `MIGRAÇÃO 004 APLICADA: relatos de inválidos e desativação lógica; nenhum código, cópia ou lote alterado.`
    - `A migração 003_distribuicao_hibrida precisa estar aplicada antes da 004`: nada foi feito.
    - `MIGRAÇÃO 004 REAPLICADA (execução nº N)`: já tinha rodado; seguro (relatos, bloqueios e desativações são mantidos).
@@ -371,11 +378,13 @@ Aplica `migrations/004_codigos_invalidos.sql`. Ela é **aditiva**: não apaga ne
 |---|---|---|
 | 1 | Membro abre "Reportar inválidos", cola uma lista com repetidos e separadores misturados | 1º clique mostra quantos únicos e a plataforma; 2º envia; resumo com encontrados/reportados/não encontrados |
 | 2 | Mesma lista de novo | "você já tinha reportado" |
-| 3 | Duas pessoas que **copiaram** o mesmo código relatam | ele sai da lista; quem tentar copiar por uma lista antiga recebe "desativado…" |
+| 3 | Duas pessoas que **copiaram** a mesma publicação relatam (até 72 h depois) | ela sai da lista; quem tentar copiar por uma lista antiga recebe "desativado…" |
 | 4 | Três pessoas que **não** copiaram relatam | nada muda; o admin vê os relatos |
 | 5 | Admin → "Códigos reportados" → Confirmar (2 cliques) | some do mural e aparece em "Bloqueados"; tentar postar de novo: "não entrou: confirmado como inválido" |
-| 6 | Admin → Reverter / Desbloquear | volta ao mural (se ainda estiver dentro das 48 h e com vaga) |
-| 7 | Cópias, lote, recuperação, ranking e contador | como antes |
+| 6 | Admin → Bloqueados → Desbloquear | libera republicar; a publicação confirmada **continua** desativada |
+| 7 | Admin → Reativar naquela publicação | só ela volta ao mural (se ainda estiver dentro das 48 h e com vaga) |
+| 8 | Admin → "Histórico dos inválidos" | cada passo com estado anterior e autor |
+| 9 | Cópias, lote, recuperação, ranking e contador | como antes |
 
 ## Reverter
 

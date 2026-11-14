@@ -155,8 +155,11 @@ end $$;
 
 drop function if exists public.relatar_invalidos(text, text[]);
 drop function if exists public.admin_codigos_invalidos();
-drop function if exists public.admin_confirmar_invalido(text, text, text);
-drop function if exists public.admin_reverter_invalido(text, text, text);
+drop function if exists public.admin_confirmar_invalido(bigint, text);
+drop function if exists public.admin_desbloquear_codigo(text, text, text);
+drop function if exists public.admin_reativar_publicacao(bigint, text);
+drop function if exists public.admin_confirmar_invalido(text, text, text);   -- versão anterior da branch
+drop function if exists public.admin_reverter_invalido(text, text, text);    -- versão anterior da branch
 
 grant execute on function public.copiar_codigo(bigint), public.copiar_codigo_v2(bigint),
   public.pegar_lote(text, int), public.postar_codigos(text, text[]) to authenticated;

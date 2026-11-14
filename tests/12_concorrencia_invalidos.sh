@@ -8,7 +8,9 @@
 #   R  admin confirma x alguém republica a mesma combinação (já vencida):
 #      nunca sobra publicação ativa de um código bloqueado
 #   S  carga mista (relatos de vários códigos, lotes, cópias, confirmações,
-#      reversões, apagar): nenhum impasse (deadlock) nem erro inesperado
+#      desbloqueios, reativações, apagar): nenhum impasse nem erro inesperado
+#   T  confirmar x desbloquear x reativar x republicar a mesma combinação:
+#      nunca termina bloqueada com publicação ativa; tudo auditado
 #
 # Uso: PSQL="psql -h HOST -p PORTA -U postgres -d BANCO" ./tests/12_concorrencia_invalidos.sh
 set -euo pipefail
@@ -52,7 +54,7 @@ for r in $(seq 1 20); do
   $Q -c "insert into public.codigos (plataforma, codigo, autor_id) select '77', 'Q${r}_' || g, 'f4_a' from generate_series(1, 3) g" >/dev/null
   id=$(id_de "Q${r}_1")
   $Q -c "insert into public.copias (codigo_id, usuario_id) values ($id, 'f4_b');
-         insert into public.relatos_invalidos (codigo_id, plataforma, codigo, usuario_id, qualificado) values ($id, '77', 'Q${r}_1', 'f4_b', true);
+         insert into public.relatos_invalidos (codigo_id, plataforma, codigo, usuario_id, associacao, qualificado, copia_em) values ($id, '77', 'Q${r}_1', 'f4_b', 'copiada', true, now());
          insert into public.copias (codigo_id, usuario_id) values ($id, 'f4_c')" >/dev/null
   em_paralelo "$TMP/q_rel"  "$(como f4_c) select public.relatar_invalidos('77', array['Q${r}_1']);"
   em_paralelo "$TMP/q_ind"  "$(como f4_d) select public.copiar_codigo_v2($id);"
@@ -76,7 +78,7 @@ echo "ok  Q: relato que suspende x cópia x lote (20 rodadas): respostas iguais 
 for r in $(seq 1 15); do
   limpa
   $Q -c "insert into public.codigos (plataforma, codigo, autor_id, criado_em) values ('77', 'R$r', 'f4_a', now() - interval '49 hours')" >/dev/null
-  em_paralelo "$TMP/r_conf" "$(como f4_adm) select public.admin_confirmar_invalido('77', 'R$r');"
+  em_paralelo "$TMP/r_conf" "$(como f4_adm) select public.admin_confirmar_invalido($(id_de "R$r"));"
   em_paralelo "$TMP/r_post" "$(como f4_b) select public.postar_codigos('77', array['R$r']);"
   wait
   for f in r_conf r_post; do [[ $(cat "$TMP/$f") == ERRO* ]] && falha "R$r/$f: $(cat "$TMP/$f")"; done
@@ -99,8 +101,9 @@ for r in $(seq 1 10); do
   em_paralelo "$TMP/s3" "$(como f4_d) select public.relatar_invalidos('77', array[$lista]);"
   em_paralelo "$TMP/s4" "$(como f4_adm) select public.pegar_lote('77', 15);"
   em_paralelo "$TMP/s5" "$(como f4_d) select public.pegar_lote('77', 10);"
-  em_paralelo "$TMP/s6" "$(como f4_adm) select public.admin_confirmar_invalido('77', 'S${r}_7');"
-  em_paralelo "$TMP/s7" "$(como f4_adm) select public.admin_reverter_invalido('77', 'S${r}_8');"
+  em_paralelo "$TMP/s6" "$(como f4_adm) select public.admin_confirmar_invalido($(id_de "S${r}_7"));"
+  em_paralelo "$TMP/s7" "$(como f4_adm) select public.admin_desbloquear_codigo('77', 'S${r}_8');"
+  em_paralelo "$TMP/s11" "$(como f4_adm) select public.admin_reativar_publicacao($(id_de "S${r}_10"));"
   em_paralelo "$TMP/s8" "$(como f4_b) select public.copiar_codigo_v2($(id_de "S${r}_9"));"
   em_paralelo "$TMP/s9" "$(como f4_a) select public.apagar_codigo($(id_de "S${r}_3"));"
   em_paralelo "$TMP/s10" "$(como f4_c) select public.postar_codigos('77', array['S${r}_7', 'S${r}_NOVO']);"
@@ -110,7 +113,31 @@ for r in $(seq 1 10); do
   inc=$($Q -c "select count(*) from public.codigos where plataforma = '77' and (desativado_em is null) <> (desativacao is null)")
   [ "$inc" = 0 ] || falha "S$r: estado de desativação incoerente"
 done
-echo "ok  S: carga mista (10 rodadas x 10 operações paralelas): nenhum impasse nem erro, ≤ 3 cópias"
+echo "ok  S: carga mista (10 rodadas x 11 operações paralelas): nenhum impasse nem erro, ≤ 3 cópias"
+
+# T
+for r in $(seq 1 15); do
+  limpa
+  $Q -c "insert into public.codigos (plataforma, codigo, autor_id, criado_em) values
+           ('77', 'T$r', 'f4_a', now() - interval '60 hours'), ('77', 'T$r', 'f4_b', now() - interval '1 hour')" >/dev/null
+  $Q -c "update public.codigos set desativado_em = now(), desativacao = 'relatos' where id = (select min(id) from public.codigos where codigo = 'T$r')" >/dev/null
+  velho=$($Q -c "select min(id) from public.codigos where codigo = 'T$r'"); novo=$(id_de "T$r")
+  em_paralelo "$TMP/t1" "$(como f4_adm) select public.admin_confirmar_invalido($novo);"
+  em_paralelo "$TMP/t2" "$(como f4_adm) select public.admin_desbloquear_codigo('77', 'T$r');"
+  em_paralelo "$TMP/t3" "$(como f4_adm) select public.admin_reativar_publicacao($velho);"
+  em_paralelo "$TMP/t4" "$(como f4_c) select public.postar_codigos('77', array['T$r']);"
+  wait
+  for f in t1 t2 t3 t4; do
+    if grep -q ERRO "$TMP/$f" && ! grep -q codigo_bloqueado "$TMP/$f"; then falha "T$r/$f: $(cat "$TMP/$f")"; fi
+  done
+  bloq=$($Q -c "select count(*) from public.codigos_bloqueados where plataforma = '77' and codigo = 'T$r'")
+  ativos=$($Q -c "select count(*) from public.codigos where plataforma = '77' and codigo = 'T$r' and desativado_em is null")
+  [ "$bloq" = 0 ] || [ "$ativos" = 0 ] || falha "T$r: combinação bloqueada com publicação ativa"
+  ev=$($Q -c "select count(*) from public.eventos_invalidos where codigo = 'T$r'")
+  [ "$ev" -ge 1 ] || falha "T$r: nenhuma auditoria"
+  echo "bloq=$bloq ativos=$ativos" >> "$TMP/t_resumo"
+done
+echo "ok  T: confirmar x desbloquear x reativar x republicar a mesma combinação (15 rodadas): nunca bloqueada com publicação ativa ($(sort "$TMP/t_resumo" | uniq -c | tr -s ' ' | tr '\n' ';'))"
 
 limpa
 [ "$falhas" = 0 ] && echo "TODOS OS TESTES DE CONCORRÊNCIA DA 004 PASSARAM" || { echo "$falhas FALHAS"; exit 1; }

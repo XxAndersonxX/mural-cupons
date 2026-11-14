@@ -177,15 +177,19 @@ for perfil in anon estranho pendente rejeitado suspenso membro admin; do
     anon)
       confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^401 .*42501'
       confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^401 .*42501'
-      confere $perfil POST "/rpc/admin_confirmar_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^401 .*42501' ;;
+      confere $perfil POST "/rpc/admin_confirmar_invalido" "{\"p_codigo_id\":$ID}" '^401 .*42501'
+      confere $perfil POST "/rpc/admin_desbloquear_codigo" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^401 .*42501'
+      confere $perfil POST "/rpc/admin_reativar_publicacao" "{\"p_codigo_id\":$ID}" '^401 .*42501' ;;
     membro)
       confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1","NAOTEM"]}' '^200 \{.*"encontrados" ?: ?1.*"nao_encontrados" ?: ?1.*"reportados" ?: ?1'
       confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"XYZ","p_codigos":["APICOD1"]}' '^400 .*plataforma_invalida'
       confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^400 .*acesso_negado'
-      confere $perfil POST "/rpc/admin_confirmar_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^400 .*acesso_negado'
-      confere $perfil POST "/rpc/admin_reverter_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^400 .*acesso_negado' ;;
+      confere $perfil POST "/rpc/admin_confirmar_invalido" "{\"p_codigo_id\":$ID}" '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/admin_desbloquear_codigo" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/admin_reativar_publicacao" "{\"p_codigo_id\":$ID}" '^400 .*acesso_negado' ;;
     admin)
-      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^200 \{"publicacoes" ?: ?\[.*"APICOD1".*"bloqueados"'
+      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^200 \{"publicacoes" ?: ?\[.*"APICOD1".*"bloqueados".*"eventos"'
+      confere $perfil POST "/rpc/admin_reativar_publicacao" "{\"p_codigo_id\":$ID}" '^200 \{"status" ?: ?"relatos_descartados"'
       confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^200 \{.*"proprios" ?: ?1' ;;
     *)
       confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^400 .*acesso_negado'

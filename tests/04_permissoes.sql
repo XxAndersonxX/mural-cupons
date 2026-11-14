@@ -77,7 +77,7 @@ insert into esperado_fn values
   ('resumo_lote', false),
   -- migração 004
   ('relatar_invalidos', true), ('admin_codigos_invalidos', true), ('admin_confirmar_invalido', true),
-  ('admin_reverter_invalido', true);
+  ('admin_desbloquear_codigo', true), ('admin_reativar_publicacao', true);
 
 select teste.ok(not exists (
   select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace

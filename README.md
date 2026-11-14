@@ -9,7 +9,7 @@ Site para um grupo de amigos compartilhar códigos de cupom das plataformas
 - Cada código some depois de ser pego por **3 pessoas diferentes** ou **2 dias** depois de postado
 - Abas: Plataformas, Usuários, Ranking, Calculadora e Admin
 - **Copiar lista:** registra até 200 códigos numa operação só, divididos igualmente entre quem postou (sempre os mais antigos de cada pessoa primeiro), e copia um por linha (pronto para o `comprador_cupons.py`); dá para recuperar os lotes das últimas 48 h sem gastar cópias
-- **Reportar inválidos:** cola a lista de rejeitados do comprador; um código só sai do mural com 2 relatos de quem o copiou (suspensão) ou com a confirmação de um administrador (que também impede republicar). Nada é apagado e o admin pode reverter
+- **Reportar inválidos:** cola a lista de rejeitados do comprador; um código só sai do mural com 2 relatos de quem copiou aquela publicação nas últimas 72 h (suspensão) ou com a confirmação de um administrador (que também impede republicar). Nada é apagado; o admin desbloqueia a republicação e reativa publicações separadamente, tudo auditado
 - **Ranking** por códigos postados, com a coluna "Aproveitados" (publicações que outro membro pegou)
 - **Acesso por aprovação:** qualquer pessoa pode criar conta e pedir para entrar, mas só vê os cupons depois que um administrador aprovar
 

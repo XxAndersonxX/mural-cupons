@@ -253,7 +253,7 @@ insert into public.codigos (plataforma, codigo, autor_id) values ('77', 'DOWN4A'
 insert into public.copias (codigo_id, usuario_id) select id, u from public.codigos, unnest(array['f4_b','f4_c']) u where codigo = 'DOWN4A';
 select teste.como('f4_b', 'f4b'); set role authenticated; select public.relatar_invalidos('77', array['DOWN4A']);
 select teste.como('f4_c', 'f4c'); select public.relatar_invalidos('77', array['DOWN4A']);
-select teste.como('f4_adm', 'f4adm'); select public.admin_confirmar_invalido('77', 'DOWN4B');
+select teste.como('f4_adm', 'f4adm'); select public.admin_confirmar_invalido((select max(id) from public.codigos where codigo = 'DOWN4B'));
 SQL
 verifica "foto antes do down da 004" "drop table if exists teste.estado4; create table teste.estado4 as select
   (select count(*) from public.relatos_invalidos) rel, (select count(*) from public.codigos_bloqueados) blq,
@@ -266,7 +266,8 @@ verifica "down 004: volta exatamente à 003" \
            where proname in ('copiar_codigo', 'copiar_codigo_v2', 'pegar_lote', 'postar_codigos')) = (select fns from teste.antes4),
      'down 004: view e as 4 funções idênticas às da 003');"
 verifica "down 004: funções novas removidas" \
-  "select teste.ok(to_regproc('public.relatar_invalidos') is null and to_regproc('public.admin_confirmar_invalido') is null, 'down 004: funções novas removidas');"
+  "select teste.ok(to_regproc('public.relatar_invalidos') is null and to_regproc('public.admin_confirmar_invalido') is null
+     and to_regproc('public.admin_desbloquear_codigo') is null and to_regproc('public.admin_reativar_publicacao') is null, 'down 004: funções novas removidas');"
 verifica "down 004: nada apagado" \
   "select teste.ok((select (count(*)) from public.relatos_invalidos) = (select rel from teste.estado4)
      and (select count(*) from public.codigos_bloqueados) = (select blq from teste.estado4)

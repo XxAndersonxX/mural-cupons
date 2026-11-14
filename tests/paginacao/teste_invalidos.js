@@ -96,7 +96,7 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
   p.ctl.atrasoRpc = null;
   const res = await p.textContent('#msgInvalidos');
   exige(p.ctl.rpc.filter(x => x === 'relatar_invalidos').length === 1, 'clique duplo durante o envio: uma requisição só');
-  exige(/4 de 6 encontrados no mural \(BRA365\); 3 reportados agora; 1 não encontrado nesta plataforma; 1 é seu \(use Apagar\); 1 com formato inválido\./.test(res)
+  exige(/4 de 6 encontrados no mural \(BRA365\); 3 reportados agora; 1 não conta para a retirada automática \(você não copiou .*\); 1 não encontrado nesta plataforma; 1 é seu \(use Apagar\); 1 com formato inválido\./.test(res)
         && await p.inputValue('#inInvalidos') === '' && await p.textContent('#btnInvalidos') === 'Verificar e enviar',
         `resumo: "${res}"`);
   exige(ativo('X1') && ativo('X2') && ativo('X3'), 'um relato sozinho não tira nada do mural');
@@ -165,13 +165,25 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
   await pe.waitForFunction(() => /postado/.test($('msgPostar').textContent), null, { timeout: 10000 }).catch(() => {});
   exige(/1 código postado em BRA365\. .*1 não entrou: confirmado como inválido \(X3\)/.test(await pe.textContent('#msgPostar')),
         `republicar código confirmado: "${await pe.textContent('#msgPostar')}"`);
-  // reverter
-  const bRev = `#tbBloqueados [data-inv="reverter"][data-cod-inv="X3"]`;
-  await velha.click(bRev); await velha.click(bRev);
-  await velha.waitForFunction(() => /revertido/.test($('msgReportados').textContent), null, { timeout: 10000 }).catch(() => {});
+  // desbloquear: só libera a republicação; a publicação confirmada continua desativada
+  const bDes = `#tbBloqueados [data-inv="desbloquear"][data-cod-inv="X3"]`;
+  await velha.click(bDes);
+  exige(await velha.textContent(bDes) === 'Liberar republicação?', '1º clique em Desbloquear só pede confirmação');
+  await velha.click(bDes);
+  await velha.waitForFunction(() => /desbloqueado|não estava/.test($('msgReportados').textContent), null, { timeout: 10000 }).catch(() => {});
   await ocioso(velha);
-  exige(ativo('X3') && !/X3/.test(await velha.textContent('#tbBloqueados')) && await velha.evaluate(() => codigos.some(x => x.codigo === 'X3')),
-        'reverter: X3 volta ao mural, sai dos bloqueados e aparece na lista');
+  exige(!ativo('X3') && !/X3/.test(await velha.textContent('#tbBloqueados')) && /0 reativada.*1 continua/.test(await velha.textContent('#msgReportados')),
+        `desbloquear: sai dos bloqueados, mas a publicação confirmada NÃO volta sozinha ("${(await velha.textContent('#msgReportados')).slice(0, 80)}…")`);
+  // reativar a publicação específica
+  const bRea = `#tbReportados [data-inv="reativar"][data-cod-inv="X3"]`;
+  await velha.click(bRea); await velha.click(bRea);
+  await velha.waitForFunction(() => /reativado/.test($('msgReportados').textContent), null, { timeout: 10000 }).catch(() => {});
+  await ocioso(velha);
+  exige(ativo('X3') && await velha.evaluate(() => codigos.some(x => x.codigo === 'X3')), 'reativar (só esta publicação): X3 volta ao mural');
+  await velha.click('#painelReportados details summary');
+  const hist = await velha.textContent('#listaEventosInv');
+  exige(/X3.*reativado \(antes: admin\)/.test(hist) && /X3.*desbloqueado/.test(hist) && /X3.*confirmado inválido \(antes: ativo\)/.test(hist)
+        && /X1.*suspenso automaticamente.*automático/.test(hist), 'histórico dos inválidos mostra cada passo, com estado anterior e autor');
   exige(velha.erros.length === 0 && pe.erros.length === 0, 'sem erros de JS');
   await pe.ctx.close();
 
