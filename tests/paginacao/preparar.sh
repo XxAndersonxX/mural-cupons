@@ -16,7 +16,7 @@ $PB -c "do \$\$ begin if not exists (select 1 from pg_roles where rolname='authe
 P="$PB -d mural_pag"
 $P -f $R/tests/00_simular_supabase.sql >/dev/null
 $P -c "grant anon, authenticated to authenticator" >/dev/null
-for f in supabase.sql migrations/001_membros.sql migrations/002_copias_ranking.sql migrations/003_distribuicao_hibrida.sql; do $P -f $R/$f >/dev/null 2>&1; done
+for f in supabase.sql $(cd "$R" && ls migrations/0*.sql | grep -v _down.sql); do $P -f $R/$f >/dev/null 2>&1 || { echo "falhou $f"; exit 1; }; done
 $P >/dev/null <<'SQL'
 insert into public.usuarios (id, nome, papel, situacao) values
  ('user_anderson', 'anderson', 'admin', 'ativo'), ('user_cafe', 'cafe', 'membro', 'ativo'),

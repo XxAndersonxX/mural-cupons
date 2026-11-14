@@ -40,6 +40,9 @@ begin
   if exists (select 1 from public.migracoes where versao = '003_distribuicao_hibrida' and revertida_em is null) then
     raise exception 'A migração 003 está ativa: reaplicar a 002 desfaria a distribuição híbrida. Reverta a 003 antes (003_distribuicao_hibrida_down.sql), reaplique a 002 e depois a 003. Nada foi alterado.';
   end if;
+  if exists (select 1 from public.migracoes where versao = '004_codigos_invalidos' and revertida_em is null) then
+    raise exception 'A migração 004 está ativa: reaplicar a 002 desfaria os filtros de códigos inválidos. Reverta a 004 antes (004_codigos_invalidos_down.sql), reaplique a 002 e depois a 004. Nada foi alterado.';
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------

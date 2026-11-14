@@ -305,3 +305,82 @@ Proteções:
 - Reaplicar `002_copias_ranking.sql` com a 003 ativa também é **recusado**, porque desfaria a distribuição híbrida sem avisar. Para reaplicar a 002, primeiro reverta a 003, depois reaplique a 002 e então a 003.
 
 Esses dois arquivos da 002 ganharam só essa verificação no começo; para quem não tem a 003, eles se comportam exatamente como antes.
+
+# Migração 004 (relatos de códigos inválidos)
+
+Aplica `migrations/004_codigos_invalidos.sql`. Ela é **aditiva**: não apaga nem altera códigos, cópias ou lotes que já existem.
+
+## Regra (conservadora)
+
+- **Relato:** fica ligado ao ID de quem relatou e vale uma vez por pessoa para cada publicação. Ele aponta para a publicação mais recente daquele código na plataforma escolhida. O autor não relata o próprio código.
+- **Relato qualificado:** é o de quem copiou aquela publicação pelo mural. Relatos de quem não copiou ficam registrados para o admin, mas não têm efeito automático.
+- **Por que exigir isso:** o comprador marca como "rejeitado" também o cupom que *aquela conta* já usou, o que não prova que ele seja inválido para todos.
+- **2 relatos qualificados de pessoas diferentes:** o código é **suspenso**. Sai da lista, do lote e das cópias. Não bloqueia republicar depois de 48 h.
+- **Admin confirma:** o código é desativado em todas as publicações daquela plataforma e fica **bloqueado** para republicação, mesmo depois de 48 h.
+- **Admin reverte:** desbloqueia, reativa e descarta os relatos antigos, para que não haja nova suspensão imediata.
+- **Desativação lógica:** nada é apagado. Cópias, lotes, a recuperação de lotes e o ranking histórico (postados e aproveitados) ficam iguais. A coluna "ativos" do ranking deixa de contar os desativados.
+
+## O que muda no banco
+
+| Objeto | Mudança |
+|---|---|
+| `codigos` | colunas novas `desativado_em` e `desativacao` (`relatos`/`admin`), nulas para tudo que já existe |
+| `relatos_invalidos`, `codigos_bloqueados`, `eventos_invalidos` | tabelas novas; RLS ligado e **nenhum acesso direto** pela API |
+| `codigos_ativos` (view) | ignora desativados |
+| `copiar_codigo`, `copiar_codigo_v2` | recusam desativados (`false` / status novo `invalidado`) |
+| `pegar_lote` | uma condição a mais (ignora desativados); critério e travas da 003 iguais |
+| `postar_codigos` | recusa combinações bloqueadas e devolve a lista nova `bloqueados` |
+| `relatar_invalidos`, `admin_codigos_invalidos`, `admin_confirmar_invalido`, `admin_reverter_invalido` | funções novas |
+| 001, 002, 003 e `003_..._down` | só uma verificação no começo: recusam rodar enquanto a 004 estiver ativa (sobrescreveriam os filtros). Para quem não tem a 004, nada muda |
+
+## Ordem de implantação: **site primeiro, migração depois**
+
+| Site \ Banco | Banco sem a 004 | Banco com a 004 |
+|---|---|---|
+| **Site atual (`main`)** | normal | ⚠ ao copiar um código desativado por uma lista desatualizada, o site antigo dá erro de JavaScript (não conhece o status `invalidado`); lista, lote e contador funcionam |
+| **Site novo** | normal; "Reportar inválidos" e a revisão do admin mostram "o banco ainda não foi atualizado" | normal |
+
+1. Merge do PR `feature/reportar-invalidos → main`. Espere 1 a 2 minutos e recarregue com **Ctrl+F5**.
+2. Só então aplique a migração (abaixo).
+
+## Passo a passo da migração
+
+1. **Snapshot de dados** (é uma cópia das linhas, não um backup completo):
+   ```sql
+   create schema if not exists backup;
+   create table backup.codigos_antes_004 as select * from public.codigos;
+   create table backup.copias_antes_004 as select * from public.copias;
+   ```
+2. **Aplicar:** cole `migrations/004_codigos_invalidos.sql` inteiro no SQL Editor e clique em **Run**.
+   - Testado também com cada um dos 31 comandos numa conexão separada, e interrompido em cada ponto possível antes de completar de novo. Em nenhum ponto cópias, lote, publicação ou lista ficam sem permissão.
+   - Esperado: `MIGRAÇÃO 004 APLICADA: relatos de inválidos e desativação lógica; nenhum código, cópia ou lote alterado.`
+   - `A migração 003_distribuicao_hibrida precisa estar aplicada antes da 004`: nada foi feito.
+   - `MIGRAÇÃO 004 REAPLICADA (execução nº N)`: já tinha rodado; seguro (relatos, bloqueios e desativações são mantidos).
+   - Erro no meio ou sem mensagem final: rode o arquivo inteiro de novo.
+3. **Verificar (só leitura):**
+   ```sql
+   select versao, aplicacoes, revertida_em from public.migracoes order by versao;
+   select count(*) as codigos, count(desativado_em) as desativados from public.codigos;   -- desativados = 0
+   select (select count(*) from public.copias) = (select count(*) from backup.copias_antes_004) as copias_iguais;
+   ```
+   E `tests/verificar_supabase_anon.sh` deve terminar em "VISITANTE ANÔNIMO NÃO ACESSA NADA".
+
+## Testes reais depois da migração
+
+| # | Teste | Esperado |
+|---|---|---|
+| 1 | Membro abre "Reportar inválidos", cola uma lista com repetidos e separadores misturados | 1º clique mostra quantos únicos e a plataforma; 2º envia; resumo com encontrados/reportados/não encontrados |
+| 2 | Mesma lista de novo | "você já tinha reportado" |
+| 3 | Duas pessoas que **copiaram** o mesmo código relatam | ele sai da lista; quem tentar copiar por uma lista antiga recebe "desativado…" |
+| 4 | Três pessoas que **não** copiaram relatam | nada muda; o admin vê os relatos |
+| 5 | Admin → "Códigos reportados" → Confirmar (2 cliques) | some do mural e aparece em "Bloqueados"; tentar postar de novo: "não entrou: confirmado como inválido" |
+| 6 | Admin → Reverter / Desbloquear | volta ao mural (se ainda estiver dentro das 48 h e com vaga) |
+| 7 | Cópias, lote, recuperação, ranking e contador | como antes |
+
+## Reverter
+
+1. **Banco:** rode `migrations/004_codigos_invalidos_down.sql`. A view e as quatro funções voltam a ser **idênticas** às da 003 (o teste compara o texto), e as funções novas são removidas.
+   - **Nada é apagado:** relatos, bloqueios, eventos e colunas ficam guardados, e reaplicar a 004 depois restaura o efeito.
+   - Enquanto ela estiver revertida, os códigos desativados **voltam a aparecer** e os bloqueados podem ser republicados.
+   - Pode ser rodado de novo sem efeito.
+2. **Site (opcional):** o site novo funciona sem a 004; só os painéis novos mostram o aviso de banco desatualizado.

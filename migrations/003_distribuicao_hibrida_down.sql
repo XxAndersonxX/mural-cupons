@@ -9,6 +9,14 @@
 -- =====================================================================
 begin;
 
+-- A 004 depende da pegar_lote() desta migração: reverta a 004 primeiro.
+do $$
+begin
+  if exists (select 1 from public.migracoes where versao = '004_codigos_invalidos' and revertida_em is null) then
+    raise exception 'Reverta a migração 004 antes (004_codigos_invalidos_down.sql). Nada foi alterado.';
+  end if;
+end $$;
+
 -- pegar_lote() exatamente como na migração 002
 create or replace function public.pegar_lote(p_plataforma text, p_quantidade int)
 returns json language plpgsql security definer set search_path = '' as $$

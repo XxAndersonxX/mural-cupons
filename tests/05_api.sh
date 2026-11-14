@@ -32,6 +32,7 @@ $P -f supabase.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/001_membros.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/002_copias_ranking.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 $P -f migrations/003_distribuicao_hibrida.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
+$P -f migrations/004_codigos_invalidos.sql >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; exit 1; }
 
 # um usuário de cada tipo + um código
 $P >/dev/null <<'SQL'
@@ -167,6 +168,29 @@ for perfil in anon estranho pendente rejeitado suspenso membro admin; do
 
   [ $perfil != admin ] && [ $perfil != anon ] && \
     confere $perfil POST "/rpc/admin_alterar_acesso" '{"p_alvo":"u_pend","p_acao":"aprovar"}' '^400 .*nao_admin'
+
+  # migração 004: relatos de inválidos (tabelas fora da API; tudo por função)
+  for t in relatos_invalidos codigos_bloqueados eventos_invalidos; do confere $perfil GET "/$t" "" "$NEGADO"; done
+  confere $perfil POST  "/relatos_invalidos" '{"plataforma":"777","codigo":"APICOD1","usuario_id":"u_membro","qualificado":true}' '^(401|403) .*42501'
+  confere $perfil PATCH "/codigos?id=eq.$ID" '{"desativado_em":null}' '^(401|403) .*42501'
+  case $perfil in
+    anon)
+      confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^401 .*42501'
+      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^401 .*42501'
+      confere $perfil POST "/rpc/admin_confirmar_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^401 .*42501' ;;
+    membro)
+      confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1","NAOTEM"]}' '^200 \{.*"encontrados" ?: ?1.*"nao_encontrados" ?: ?1.*"reportados" ?: ?1'
+      confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"XYZ","p_codigos":["APICOD1"]}' '^400 .*plataforma_invalida'
+      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/admin_confirmar_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/admin_reverter_invalido" '{"p_plataforma":"777","p_codigo":"APICOD1"}' '^400 .*acesso_negado' ;;
+    admin)
+      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^200 \{"publicacoes" ?: ?\[.*"APICOD1".*"bloqueados"'
+      confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^200 \{.*"proprios" ?: ?1' ;;
+    *)
+      confere $perfil POST "/rpc/relatar_invalidos" '{"p_plataforma":"777","p_codigos":["APICOD1"]}' '^400 .*acesso_negado'
+      confere $perfil POST "/rpc/admin_codigos_invalidos" '{}' '^400 .*acesso_negado' ;;
+  esac
 done
 
 # fase 3: trava presa > 5 s chega ao site como erro 'lote_ocupado' (e nada é registrado)

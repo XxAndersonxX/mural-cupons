@@ -3,7 +3,7 @@
 # transação separadas (nada de sessão, tabela temporária ou BEGIN/COMMIT
 # atravessa de um comando para o outro).
 #
-# Verifica, para as migrações 002 e 003:
+# Verifica, para as migrações 002, 003 e 004:
 #   1. aplicada comando a comando: sem erros, mensagem de PRIMEIRA aplicação,
 #      funções e privilégios corretos (tests/04_permissoes.sql) e regras ok
 #   2. reaplicada comando a comando e pelo arquivo inteiro: mensagem de
@@ -166,5 +166,72 @@ exige "   migracoes marca a reversão" [ "$($P -c "select revertida_em is not nu
 por_comando migrations/003_distribuicao_hibrida.sql >/dev/null
 exige "   reaplicada após o down: $(sed 's/.*NOTICE:  //' "$TMP/notices")" grep -q "REAPLICADA" "$TMP/notices"
 exige "   pegar_lote da 003 ativa" [ "$(cfg)" = 'search_path="",lock_timeout=5s' ]
+
+# ===================== migração 004 =====================
+ativa4() { $P -c "select to_regproc('public.relatar_invalidos') is not null
+                     and (select prosrc like '%desativado_em is null%' from pg_proc where proname = 'pegar_lote')
+                     and pg_get_viewdef('public.codigos_ativos') like '%desativado_em IS NULL%'"; }
+acesso4() { $P -c "select has_function_privilege('authenticated', 'public.pegar_lote(text,int)', 'execute')
+                      and has_function_privilege('authenticated', 'public.copiar_codigo_v2(bigint)', 'execute')
+                      and has_function_privilege('authenticated', 'public.postar_codigos(text,text[])', 'execute')
+                      and has_table_privilege('authenticated', 'public.codigos_ativos', 'select')"; }
+total4=$(python3 -I tests/separar_sql.py migrations/004_codigos_invalidos.sql | tr -cd '\0' | wc -c); total4=$((total4 + 1))
+echo "== 004 tem $total4 comandos; cada um roda numa conexão separada"
+
+# 9. primeira aplicação
+n=$(por_comando migrations/004_codigos_invalidos.sql | tail -n 1)
+[ "$n" = "$total4" ] || { echo "executou $n de $total4"; exit 1; }
+grep -q "MIGRAÇÃO 004 APLICADA" "$TMP/notices" || { echo "faltou a mensagem de primeira aplicação da 004"; cat "$TMP/notices"; exit 1; }
+ok "9. 004 aplicada comando a comando ($total4 conexões): $(sed 's/.*NOTICE:  //' "$TMP/notices")"
+exige "   filtros da 004 ativos (view, lote, função de relato)" [ "$(ativa4)" = t ]
+$P -f tests/04_permissoes.sql > "$TMP/perm" 2>&1 || { cat "$TMP/perm"; exit 1; }
+ok "   $(tail -n 1 "$TMP/perm")"
+$P >/dev/null <<'SQL'
+insert into public.usuarios (id, nome, papel) values ('ed_d', 'edd', 'membro') on conflict do nothing;
+delete from public.codigos where plataforma = '77';
+insert into public.codigos (plataforma, codigo, autor_id) values ('77', 'ED77', 'ed_a');
+insert into public.copias (codigo_id, usuario_id) select id, u from public.codigos, unnest(array['ed_b','ed_c']) u where codigo = 'ED77';
+select teste.como('ed_b', 'edb'); set role authenticated;
+select public.relatar_invalidos('77', array['ED77']);
+select teste.como('ed_c', 'edc');
+select teste.ok((public.relatar_invalidos('77', array['ED77']) ->> 'suspensos_agora')::int = 1, 'relatos funcionando após aplicação separada');
+select teste.como('ed_d', 'edd');
+select teste.ok((public.copiar_codigo_v2((select id from public.codigos where codigo = 'ED77')) ->> 'status') = 'invalidado', 'cópia recusa o suspenso');
+SQL
+ok "   relatos e suspensão funcionando"
+
+# 10. reaplicação: comando a comando e arquivo inteiro (dados mantidos)
+por_comando migrations/004_codigos_invalidos.sql >/dev/null
+grep -q "MIGRAÇÃO 004 REAPLICADA (execução nº 2)" "$TMP/notices" || { echo "esperava 004 REAPLICADA nº 2"; cat "$TMP/notices"; exit 1; }
+ok "10. 004 reaplicada comando a comando: $(sed 's/.*NOTICE:  //' "$TMP/notices")"
+$P -f migrations/004_codigos_invalidos.sql > /dev/null 2> "$TMP/err"
+grep -q "REAPLICADA (execução nº 3)" "$TMP/err" || { echo "esperava 004 REAPLICADA nº 3"; cat "$TMP/err"; exit 1; }
+exige "    reaplicação não mexe em relatos nem desativações" \
+  [ "$($P -c "select (select count(*) from public.relatos_invalidos where codigo = 'ED77') || '/' || (select desativacao from public.codigos where codigo = 'ED77')")" = "2/relatos" ]
+
+# 11. interrupção em cada ponto + nova execução completa
+for corte in $(seq 1 $((total4 - 2))); do
+  por_comando migrations/004_codigos_invalidos_down.sql >/dev/null
+  $P -c "delete from public.migracoes where versao = '004_codigos_invalidos'" >/dev/null
+  por_comando migrations/004_codigos_invalidos.sql "$corte" >/dev/null
+  [ ! -s "$TMP/notices" ] || { echo "004 interrompida em $corte mas mostrou mensagem final"; exit 1; }
+  [ "$(acesso4)" = t ] || { echo "membros perderam acesso no corte $corte da 004"; exit 1; }
+  por_comando migrations/004_codigos_invalidos.sql >/dev/null
+  grep -q "MIGRAÇÃO 004" "$TMP/notices" || { echo "nova execução após corte $corte não terminou"; exit 1; }
+  [ "$(ativa4)" = t ] || { echo "corte $corte: 004 incompleta no fim"; exit 1; }
+done
+ok "11. 004 interrompida em cada ponto (1 a $((total4 - 2))) + nova execução: termina certa; cópias, lote, postar e lista nunca ficam sem permissão"
+$P -f tests/04_permissoes.sql > "$TMP/perm" 2>&1 || { cat "$TMP/perm"; exit 1; }
+ok "    $(tail -n 1 "$TMP/perm")"
+exige "    relatos e desativação preservados durante tudo isso" \
+  [ "$($P -c "select (select count(*) from public.relatos_invalidos where codigo = 'ED77') || '/' || (select desativacao from public.codigos where codigo = 'ED77')")" = "2/relatos" ]
+
+# 12. down e nova aplicação, comando a comando
+por_comando migrations/004_codigos_invalidos_down.sql >/dev/null
+exige "12. down da 004 comando a comando: funções novas removidas" [ "$($P -c "select to_regproc('public.relatar_invalidos') is null")" = t ]
+exige "    pegar_lote da 003 de volta" [ "$($P -c "select prosrc not like '%desativado_em%' from pg_proc where proname = 'pegar_lote'")" = t ]
+por_comando migrations/004_codigos_invalidos.sql >/dev/null
+exige "    reaplicada após o down: $(sed 's/.*NOTICE:  //' "$TMP/notices")" grep -q "REAPLICADA" "$TMP/notices"
+exige "    filtros da 004 ativos de novo" [ "$(ativa4)" = t ]
 
 echo "TODOS OS TESTES DE EXECUÇÃO SEPARADA PASSARAM"

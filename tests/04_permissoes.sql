@@ -32,7 +32,9 @@ where n.nspname = 'public' order by p.proname;
 create temp table esperado_tab (obj text, auth_le boolean);
 insert into esperado_tab values
   ('usuarios', true), ('codigos', true), ('copias', true), ('eventos_acesso', true), ('migracoes', false),
-  ('codigos_ativos', true), ('ranking', true);
+  ('codigos_ativos', true), ('ranking', true),
+  -- migração 004: fora da API (só pelas funções)
+  ('relatos_invalidos', false), ('codigos_bloqueados', false), ('eventos_invalidos', false);
 
 select teste.ok(not exists (
   select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -72,7 +74,10 @@ insert into esperado_fn values
   ('registrar_entrada', false), ('definir_primeiro_admin', false), ('recuperacao_promover_admin', false),
   -- migração 002 (só existem depois dela)
   ('copiar_codigo_v2', true), ('pegar_lote', true), ('recuperar_lote', true), ('meus_lotes', true),
-  ('resumo_lote', false);
+  ('resumo_lote', false),
+  -- migração 004
+  ('relatar_invalidos', true), ('admin_codigos_invalidos', true), ('admin_confirmar_invalido', true),
+  ('admin_reverter_invalido', true);
 
 select teste.ok(not exists (
   select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace

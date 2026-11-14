@@ -202,6 +202,110 @@ PSQL="$PSQL_BASE -d $DB2" tests/07_concorrencia_lote.sh >"$LOG" 2>&1 || { cat "$
 sed 's/^/    /' "$LOG"
 $PSQL_BASE -q -X -c "drop database if exists $DB2" >/dev/null
 
+# ===================== FASE 4 (migração 004) =====================
+ETAPA="004 exige a 003"; echo "== 004 recusa banco sem a 003"
+$P -c "update public.migracoes set revertida_em = now() where versao = '003_distribuicao_hibrida'" >/dev/null
+if $P -f migrations/004_codigos_invalidos.sql >"$LOG" 2>&1; then echo "a 004 deveria ter sido recusada"; false; fi
+grep -q "003_distribuicao_hibrida precisa estar aplicada" "$LOG"
+echo "ok  004 recusada sem a 003 (nada aplicado)"
+verifica "004 recusada não criou nada" \
+  "select teste.ok(to_regproc('public.relatar_invalidos') is null and to_regclass('public.relatos_invalidos') is null, '004 recusada: nada criado');"
+$P -c "update public.migracoes set revertida_em = null where versao = '003_distribuicao_hibrida'" >/dev/null
+
+# foto do que a 004 mexe (para conferir que o down devolve exatamente a 003) e dos dados
+verifica "foto antes da 004" "drop table if exists teste.antes4; create table teste.antes4 as select
+  (select count(*) from public.codigos) codigos, (select sum(hashtext(id || plataforma || codigo || autor_id || criado_em)) from public.codigos) hcod,
+  (select count(*) from public.copias) copias, (select sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, ''))) from public.copias) hcop,
+  pg_get_viewdef('public.codigos_ativos') vw,
+  (select string_agg(proname || ':' || md5(prosrc) || ':' || coalesce(array_to_string(proconfig, ','), ''), ',' order by proname) from pg_proc
+    where proname in ('copiar_codigo', 'copiar_codigo_v2', 'pegar_lote', 'postar_codigos')) fns;"
+sql "migração 004 — primeira aplicação"     migrations/004_codigos_invalidos.sql
+grep -q "MIGRAÇÃO 004 APLICADA" "$LOG" || { ETAPA="aviso da 004"; echo "esperava 004 APLICADA"; false; }
+verifica "004 não altera dados" \
+  "select teste.ok((select (count(*), sum(hashtext(id || plataforma || codigo || autor_id || criado_em))) from public.codigos) = (select (codigos, hcod) from teste.antes4)
+     and (select (count(*), sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, '')))) from public.copias) = (select (copias, hcop) from teste.antes4)
+     and not exists (select 1 from public.codigos where desativado_em is not null), '004: códigos e cópias idênticos; nenhum desativado');"
+
+sql "fase 4: relatos de inválidos"          tests/11_invalidos.sql
+ETAPA="concorrência da 004"; echo "== concorrência da 004"
+PSQL="$PSQL_BASE -d $DB" tests/12_concorrencia_invalidos.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+cat "$LOG"
+sql "permissões com a 004"                  tests/04_permissoes.sql | tail -n 1
+
+sql "migração 004 — reaplicação"            migrations/004_codigos_invalidos.sql
+grep -q "MIGRAÇÃO 004 REAPLICADA (execução nº 2)" "$LOG" || { ETAPA="aviso de reaplicação da 004"; echo "esperava 004 REAPLICADA nº 2"; false; }
+
+ETAPA="anteriores protegidas pela 004"; echo "== reaplicar 001/002/003 ou reverter a 003 com a 004 ativa: recusado"
+for f in 001_membros 002_copias_ranking 003_distribuicao_hibrida; do
+  if $P -f migrations/$f.sql >"$LOG" 2>&1; then echo "a $f deveria ter sido recusada"; false; fi
+  grep -q "A migração 00[34] está ativa" "$LOG" || { cat "$LOG"; false; }
+done
+if $P -f migrations/003_distribuicao_hibrida_down.sql >"$LOG" 2>&1; then echo "o down da 003 deveria ter sido recusado"; false; fi
+grep -q "Reverta a migração 004 antes" "$LOG"
+verifica "recusas não mexeram em nada" \
+  "select teste.ok(pg_get_viewdef('public.codigos_ativos') like '%desativado_em IS NULL%'
+     and (select prosrc like '%desativado_em is null%' from pg_proc where proname = 'pegar_lote')
+     and to_regproc('public.relatar_invalidos') is not null, 'reaplicações/down anteriores recusados sem mexer em nada');"
+
+# estado com relatos, suspensão e bloqueio, para o down
+$P >"$LOG" 2>&1 <<'SQL'
+insert into public.codigos (plataforma, codigo, autor_id) values ('77', 'DOWN4A', 'f4_a'), ('77', 'DOWN4B', 'f4_a');
+insert into public.copias (codigo_id, usuario_id) select id, u from public.codigos, unnest(array['f4_b','f4_c']) u where codigo = 'DOWN4A';
+select teste.como('f4_b', 'f4b'); set role authenticated; select public.relatar_invalidos('77', array['DOWN4A']);
+select teste.como('f4_c', 'f4c'); select public.relatar_invalidos('77', array['DOWN4A']);
+select teste.como('f4_adm', 'f4adm'); select public.admin_confirmar_invalido('77', 'DOWN4B');
+SQL
+verifica "foto antes do down da 004" "drop table if exists teste.estado4; create table teste.estado4 as select
+  (select count(*) from public.relatos_invalidos) rel, (select count(*) from public.codigos_bloqueados) blq,
+  (select count(*) from public.eventos_invalidos) ev, (select count(*) from public.codigos where desativado_em is not null) des,
+  (select count(*) from public.copias) cop;"
+sql "reversão da 004 (down)"                migrations/004_codigos_invalidos_down.sql
+verifica "down 004: volta exatamente à 003" \
+  "select teste.ok(pg_get_viewdef('public.codigos_ativos') = (select vw from teste.antes4)
+     and (select string_agg(proname || ':' || md5(prosrc) || ':' || coalesce(array_to_string(proconfig, ','), ''), ',' order by proname) from pg_proc
+           where proname in ('copiar_codigo', 'copiar_codigo_v2', 'pegar_lote', 'postar_codigos')) = (select fns from teste.antes4),
+     'down 004: view e as 4 funções idênticas às da 003');"
+verifica "down 004: funções novas removidas" \
+  "select teste.ok(to_regproc('public.relatar_invalidos') is null and to_regproc('public.admin_confirmar_invalido') is null, 'down 004: funções novas removidas');"
+verifica "down 004: nada apagado" \
+  "select teste.ok((select (count(*)) from public.relatos_invalidos) = (select rel from teste.estado4)
+     and (select count(*) from public.codigos_bloqueados) = (select blq from teste.estado4)
+     and (select count(*) from public.eventos_invalidos) = (select ev from teste.estado4)
+     and (select count(*) from public.codigos where desativado_em is not null) = (select des from teste.estado4)
+     and (select count(*) from public.copias) = (select cop from teste.estado4), 'down 004: relatos, bloqueios, eventos, desativações e cópias guardados');"
+verifica "down 004: migração marcada" \
+  "select teste.ok((select revertida_em is not null from public.migracoes where versao = '004_codigos_invalidos'), 'down 004: migracoes.revertida_em preenchido');"
+sql "permissões após down da 004"           tests/04_permissoes.sql | tail -n 1
+sql "down da 004 de novo (idempotente)"     migrations/004_codigos_invalidos_down.sql
+
+sql "reaplicar 004 depois do down"          migrations/004_codigos_invalidos.sql
+grep -q "MIGRAÇÃO 004 REAPLICADA" "$LOG" || { ETAPA="004 após down"; echo "esperava 004 REAPLICADA"; false; }
+verifica "após reaplicar: desativações valem de novo" \
+  "select teste.como('f4_d', 'f4d'); set role authenticated;
+   select teste.ok(not exists (select 1 from public.codigos_ativos where codigo in ('DOWN4A', 'DOWN4B'))
+     and (public.copiar_codigo_v2((select max(id) from public.codigos where codigo = 'DOWN4A')) ->> 'status') = 'invalidado',
+     'reaplicada: desativados guardados voltam a valer');"
+sql "permissões finais com a 004"           tests/04_permissoes.sql | tail -n 1
+
+ETAPA="regressão com a 004"; echo "== regressão: testes das Fases 2 e 3 (06, 07, 09, 10) num banco novo com 001..004"
+DB3=${DB}_f4
+trap '$PSQL_BASE -q -X -c "drop database if exists $DB" >/dev/null 2>&1 || true; $PSQL_BASE -q -X -c "drop database if exists $DB2" >/dev/null 2>&1 || true; $PSQL_BASE -q -X -c "drop database if exists $DB3" >/dev/null 2>&1 || true; rm -f "$LOG"' EXIT
+$PSQL_BASE -q -X -v ON_ERROR_STOP=1 -c "create database $DB3" >/dev/null
+P3="$PSQL_BASE -q -X -A -t -v ON_ERROR_STOP=1 -d $DB3"
+for f in tests/00_simular_supabase.sql supabase.sql tests/01_dados_existentes.sql migrations/001_membros.sql \
+         migrations/002_copias_ranking.sql migrations/003_distribuicao_hibrida.sql migrations/004_codigos_invalidos.sql; do
+  $P3 -f "$f" >"$LOG" 2>&1 || { cat "$LOG"; false; }
+done
+$P3 -v fase3=1 -f tests/06_copias.sql >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  06_copias.sql com a 004: $(grep -c '^ok' "$LOG") verificações"
+PSQL="$PSQL_BASE -d $DB3" tests/07_concorrencia_lote.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  07_concorrencia_lote.sh com a 004: $(grep -c '^ok' "$LOG") cenários"
+$P3 -f tests/09_distribuicao.sql >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  09_distribuicao.sql com a 004: $(grep -c '^ok' "$LOG") verificações"
+PSQL="$PSQL_BASE -d $DB3" tests/10_concorrencia_hibrida.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  10_concorrencia_hibrida.sh com a 004: $(grep -c '^ok' "$LOG") cenários"
+$PSQL_BASE -q -X -c "drop database if exists $DB3" >/dev/null
+
 ETAPA="execução comando a comando (SQL Editor)"; echo "== execução comando a comando, cada um numa conexão (SQL Editor)"
 PSQL_BASE="$PSQL_BASE" tests/08_editor_separado.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
 grep -E "^ok  [0-9]|PASSARAM" "$LOG"
