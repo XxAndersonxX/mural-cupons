@@ -129,6 +129,94 @@ sql "reaplicar 002 depois do down"          migrations/002_copias_ranking.sql
 grep -q "MIGRAÇÃO 002 REAPLICADA" "$LOG" || { ETAPA="002 após down"; echo "esperava 002 REAPLICADA"; false; }
 sql "permissões finais"                     tests/04_permissoes.sql | tail -n 1
 
+# ===================== migração 005 (apagar_codigo sem corrida) =====================
+# Só depende da 001. Roda ANTES da 003 de propósito: os testes de concorrência
+# da 003 (10_concorrencia_hibrida.sh, cenário N) apagam códigos em paralelo às
+# cópias e só são determinísticos com a correção da 005.
+ETAPA="005 exige a 001"; echo "== 005 recusa banco sem a 001"
+$P -c "update public.migracoes set revertida_em = now() where versao = '001_membros'" >/dev/null
+if $P -f migrations/005_apagar_codigo_trava.sql >"$LOG" 2>&1; then echo "a 005 deveria ter sido recusada"; false; fi
+grep -q "001_membros precisa estar aplicada antes da 005" "$LOG"
+$P -c "update public.migracoes set revertida_em = null where versao = '001_membros'" >/dev/null
+echo "ok  005 recusada sem a 001 (nada aplicado)"
+
+verifica "foto antes da 005" "drop table if exists teste.antes5; create table teste.antes5 as select
+  (select md5(prosrc) || array_to_string(proconfig, ',') from pg_proc where proname = 'apagar_codigo') fn,
+  (select count(*) from public.codigos) codigos, (select count(*) from public.copias) copias,
+  (select sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, ''))) from public.copias) hcop;"
+sql "migração 005 — primeira aplicação"     migrations/005_apagar_codigo_trava.sql
+grep -q "MIGRAÇÃO 005 APLICADA" "$LOG" || { ETAPA="aviso da 005"; echo "esperava 005 APLICADA"; false; }
+verifica "005 não altera dados" \
+  "select teste.ok((select (count(*)) from public.codigos) = (select codigos from teste.antes5)
+     and (select (count(*), sum(hashtext(codigo_id || usuario_id || coalesce(lote_id::text, '')))) from public.copias) = (select (copias, hcop) from teste.antes5)
+     and (select prosrc ilike '%for update%' from pg_proc where proname = 'apagar_codigo'), '005: só a apagar_codigo mudou; dados idênticos');"
+
+ETAPA="concorrência da exclusão"; echo "== exclusão x cópias (determinístico)"
+PSQL="$PSQL_BASE -d $DB" tests/13_apagar_concorrencia.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+cat "$LOG"
+sql "permissões com a 005"                  tests/04_permissoes.sql | tail -n 1
+
+sql "migração 005 — reaplicação"            migrations/005_apagar_codigo_trava.sql
+grep -q "MIGRAÇÃO 005 REAPLICADA (execução nº 2)" "$LOG" || { ETAPA="aviso de reaplicação da 005"; echo "esperava 005 REAPLICADA nº 2"; false; }
+
+ETAPA="001 protegida pela 005"; echo "== reaplicar a 001 ou reverter a 001 com a 005 ativa: recusado"
+# (com a 002 ativa a 001 já falhava antes, em "cannot drop columns from view" — falha
+#  preexistente e segura: tudo numa transação; o que importa é a apagar_codigo intacta)
+if $P -f migrations/001_membros.sql >"$LOG" 2>&1; then echo "a 001 deveria ter sido recusada"; false; fi
+grep -qE "A migração 00[45] está ativa|cannot drop columns from view" "$LOG" || { cat "$LOG"; false; }
+# a guarda da 005 em si: banco só com 001 + 005 (onde a reaplicação da 001 iria até o fim)
+DB5=${DB}_g5
+$PSQL_BASE -q -X -v ON_ERROR_STOP=1 -c "create database $DB5" >/dev/null
+for f in tests/00_simular_supabase.sql supabase.sql migrations/001_membros.sql migrations/005_apagar_codigo_trava.sql; do
+  $PSQL_BASE -q -X -v ON_ERROR_STOP=1 -d $DB5 -f "$f" >"$LOG" 2>&1 || { cat "$LOG"; false; }
+done
+if $PSQL_BASE -q -X -v ON_ERROR_STOP=1 -d $DB5 -f migrations/001_membros.sql >"$LOG" 2>&1; then echo "a 001 deveria ter sido recusada (só 001+005)"; false; fi
+grep -q "A migração 005 está ativa" "$LOG" || { cat "$LOG"; false; }
+[ "$($PSQL_BASE -q -X -A -t -d $DB5 -c "select prosrc ilike '%for update%' from pg_proc where proname = 'apagar_codigo'")" = t ]
+$PSQL_BASE -q -X -c "drop database if exists $DB5" >/dev/null
+echo "ok  banco só com 001+005: reaplicar a 001 é recusado pela guarda da 005, sem mexer em nada"
+if $P -f migrations/001_membros_down.sql >"$LOG" 2>&1; then echo "o down da 001 deveria ter sido recusado"; false; fi
+grep -q "Reverta a migração 00[2-5]" "$LOG" || { cat "$LOG"; false; }
+verifica "recusas não mexeram na 005" \
+  "select teste.ok((select prosrc ilike '%for update%' from pg_proc where proname = 'apagar_codigo'), 'apagar_codigo da 005 intacta após as recusas');"
+
+ETAPA="005 comando a comando"; echo "== 005 e seu down comando a comando, cada um numa conexão (SQL Editor)"
+por_comando5() {  # arquivo [corte]
+  local n=0
+  while IFS= read -r -d '' cmd || [ -n "$cmd" ]; do
+    n=$((n + 1)); $P -c "$cmd" >"$LOG" 2>&1 || { cat "$LOG"; return 1; }
+    [ -n "${2:-}" ] && [ "$n" -ge "$2" ] && break
+  done < <(python3 -I tests/separar_sql.py "$1")
+  echo "$n"
+}
+total5=$(( $(python3 -I tests/separar_sql.py migrations/005_apagar_codigo_trava.sql | tr -cd '\0' | wc -c) + 1 ))
+eh005() { $P -c "select prosrc ilike '%for update%' from pg_proc where proname = 'apagar_codigo'"; }
+por_comando5 migrations/005_apagar_codigo_trava_down.sql >/dev/null
+[ "$(eh005)" = f ] || { echo "down comando a comando não restaurou a da 001"; false; }
+for corte in $(seq 1 $((total5 - 2))); do
+  por_comando5 migrations/005_apagar_codigo_trava_down.sql >/dev/null
+  por_comando5 migrations/005_apagar_codigo_trava.sql "$corte" >/dev/null
+  $P -c "select has_function_privilege('authenticated', 'public.apagar_codigo(bigint)', 'execute')" | grep -q t \
+    || { echo "corte $corte: membros perderam a apagar_codigo"; false; }
+  por_comando5 migrations/005_apagar_codigo_trava.sql >/dev/null
+  [ "$(eh005)" = t ] || { echo "corte $corte: 005 incompleta no fim"; false; }
+done
+echo "ok  005 ($total5 comandos) interrompida em cada ponto + nova execução: termina certa; apagar_codigo nunca fica sem permissão"
+
+verifica "foto antes do down da 005" "drop table if exists teste.estado5; create table teste.estado5 as select
+  (select count(*) from public.codigos) codigos, (select count(*) from public.copias) copias;"
+sql "reversão da 005 (down)"                migrations/005_apagar_codigo_trava_down.sql
+verifica "down 005: volta exatamente à da 001" \
+  "select teste.ok((select md5(prosrc) || array_to_string(proconfig, ',') from pg_proc where proname = 'apagar_codigo') = (select fn from teste.antes5)
+     and (select revertida_em is not null from public.migracoes where versao = '005_apagar_codigo_trava')
+     and (select count(*) from public.codigos) = (select codigos from teste.estado5)
+     and (select count(*) from public.copias) = (select copias from teste.estado5), 'down 005: função idêntica à da 001; dados intactos; reversão marcada');"
+sql "permissões após down da 005"           tests/04_permissoes.sql | tail -n 1
+sql "down da 005 de novo (idempotente)"     migrations/005_apagar_codigo_trava_down.sql
+sql "reaplicar 005 depois do down"          migrations/005_apagar_codigo_trava.sql
+grep -q "MIGRAÇÃO 005 REAPLICADA" "$LOG" || { ETAPA="005 após down"; echo "esperava 005 REAPLICADA"; false; }
+sql "permissões finais com a 005"           tests/04_permissoes.sql | tail -n 1
+
 # ===================== FASE 3 (migração 003) =====================
 ETAPA="003 exige a 002"; echo "== 003 recusa banco sem a 002"
 $P -c "update public.migracoes set revertida_em = now() where versao = '002_copias_ranking'" >/dev/null
@@ -149,6 +237,9 @@ sql "fase 3: distribuição híbrida"          tests/09_distribuicao.sql
 ETAPA="concorrência da 003"; echo "== concorrência da 003"
 PSQL="$PSQL_BASE -d $DB" tests/10_concorrencia_hibrida.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
 cat "$LOG"
+ETAPA="exclusão x cópias com a 003"; echo "== exclusão x cópias de novo, agora com o lote da 003 (espera em vez de pular)"
+PSQL="$PSQL_BASE -d $DB" tests/13_apagar_concorrencia.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+grep -E "^== caminhos|PASSARAM" "$LOG"
 sql "permissões com a 003"                  tests/04_permissoes.sql | tail -n 1
 
 sql "migração 003 — reaplicação"            migrations/003_distribuicao_hibrida.sql
@@ -310,6 +401,7 @@ $PSQL_BASE -q -X -c "drop database if exists $DB3" >/dev/null
 ETAPA="execução comando a comando (SQL Editor)"; echo "== execução comando a comando, cada um numa conexão (SQL Editor)"
 PSQL_BASE="$PSQL_BASE" tests/08_editor_separado.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
 grep -E "^ok  [0-9]|PASSARAM" "$LOG"
+
 
 if [ -n "${POSTGREST:-}" ]; then
   ETAPA="API (PostgREST)"; echo "== permissões pela API (PostgREST)"

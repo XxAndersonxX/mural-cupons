@@ -369,6 +369,14 @@ begin
   return found;
 end $$;
 
+-- reaplicar a 001 com a 005 ativa voltaria a apagar_codigo() com a condição de corrida
+do $$
+begin
+  if exists (select 1 from public.migracoes where versao = '005_apagar_codigo_trava' and revertida_em is null) then
+    raise exception 'A migração 005 está ativa: reaplicar a 001 desfaria a correção da apagar_codigo(). Reverta a 005 antes (005_apagar_codigo_trava_down.sql), reaplique a 001 e depois a 005. Nada foi alterado.';
+  end if;
+end $$;
+
 create or replace function public.apagar_codigo(p_id bigint)
 returns boolean language plpgsql security definer set search_path = '' as $$
 begin
