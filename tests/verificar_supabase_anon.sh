@@ -8,6 +8,7 @@
 # errada, as próprias funções recusariam sem gravar.
 #
 # Uso: SUPABASE_URL=https://xxxx.supabase.co SUPABASE_KEY=sb_publishable_... ./tests/verificar_supabase_anon.sh
+#      (depois da migração 004: COM_004=1 inclui as tabelas e funções dela)
 set -uo pipefail
 : "${SUPABASE_URL:?}"; : "${SUPABASE_KEY:?}"
 PREFIXO="${API_PREFIXO-/rest/v1}"   # testes locais com PostgREST puro usam API_PREFIXO=""
@@ -38,4 +39,15 @@ confere "RPC pegar_lote"                 "$(pede POST /rpc/pegar_lote '{"p_plata
 confere "RPC recuperar_lote"             "$(pede POST /rpc/recuperar_lote '{}')"
 confere "RPC meus_lotes"                 "$(pede POST /rpc/meus_lotes '{}')"
 confere "RPC resumo_lote"                "$(pede POST /rpc/resumo_lote '{"p_lote":"00000000-0000-0000-0000-000000000000","p_pedidos":1}')"
+# migração 004: só depois de aplicá-la (antes disso esses endereços não existem: 404)
+if [ "${COM_004:-0}" = 1 ]; then
+  for t in relatos_invalidos codigos_bloqueados eventos_invalidos; do
+    confere "GET /$t" "$(pede GET "/$t?select=*&limit=1")"
+  done
+  confere "RPC relatar_invalidos"          "$(pede POST /rpc/relatar_invalidos '{"p_plataforma":"777","p_codigos":["VERIFICACAO"]}')"
+  confere "RPC admin_codigos_invalidos"    "$(pede POST /rpc/admin_codigos_invalidos '{}')"
+  confere "RPC admin_confirmar_invalido"   "$(pede POST /rpc/admin_confirmar_invalido '{"p_codigo_id":-1}')"
+  confere "RPC admin_desbloquear_codigo"   "$(pede POST /rpc/admin_desbloquear_codigo '{"p_plataforma":"777","p_codigo":"VERIFICACAO"}')"
+  confere "RPC admin_reativar_publicacao"  "$(pede POST /rpc/admin_reativar_publicacao '{"p_codigo_id":-1}')"
+fi
 [ $falhas = 0 ] && echo "VISITANTE ANÔNIMO NÃO ACESSA NADA" || { echo "$falhas FALHAS"; exit 1; }

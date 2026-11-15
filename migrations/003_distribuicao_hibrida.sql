@@ -43,6 +43,9 @@ begin
   if not exists (select 1 from public.migracoes where versao = '002_copias_ranking' and revertida_em is null) then
     raise exception 'A migração 002_copias_ranking precisa estar aplicada antes da 003.';
   end if;
+  if exists (select 1 from public.migracoes where versao = '004_codigos_invalidos' and revertida_em is null) then
+    raise exception 'A migração 004 está ativa: reaplicar a 003 desfaria os filtros de códigos inválidos. Reverta a 004 antes (004_codigos_invalidos_down.sql), reaplique a 003 e depois a 004. Nada foi alterado.';
+  end if;
 end $$;
 
 -- ---------------------------------------------------------------------

@@ -114,10 +114,11 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
     await p.ctx.close();
   }
 
-  // contraprova: o index.html da main corta em 1000
+  // contraprova: um index.html SEM paginação (ex.: a main antes do merge da
+  // paginação) corta em 1000. Só roda com CONTRAPROVA=arquivo.html em web/.
+  if (process.env.CONTRAPROVA) {
   sql('select teste.gera(2500)');
-  {
-    const p = await abrir('main.html', 'pedro');
+    const p = await abrir(process.env.CONTRAPROVA, 'pedro');
     await p.waitForFunction(() => codigos.length > 0, null, { timeout: 20000 }); await p.waitForTimeout(500);
     const n = (await idsNaPagina(p)).length;
     exige(n === 1000, `contraprova: a main carrega só ${n} de 2500 (corte silencioso do servidor)`);
@@ -261,8 +262,8 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
     exige(p.erros.length === 0, 'sem erros de JS');
     await p.ctx.close();
   }
-  {
-    const p = await abrir('main.html', 'anderson');
+  if (process.env.CONTRAPROVA) {
+    const p = await abrir(process.env.CONTRAPROVA, 'anderson');
     await p.waitForFunction(() => usuarios.length > 0, null, { timeout: 20000 }); await p.waitForTimeout(500);
     exige(await p.evaluate(() => usuarios.length) === 1000, 'contraprova: na main o ranking para em 1000');
     await p.ctx.close();

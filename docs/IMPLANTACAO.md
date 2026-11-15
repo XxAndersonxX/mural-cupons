@@ -355,3 +355,123 @@ Proteções:
 - Reaplicar `002_copias_ranking.sql` com a 003 ativa também é **recusado**, porque desfaria a distribuição híbrida sem avisar. Para reaplicar a 002, primeiro reverta a 003, depois reaplique a 002 e então a 003.
 
 Esses dois arquivos da 002 ganharam só essa verificação no começo; para quem não tem a 003, eles se comportam exatamente como antes.
+
+# Migração 004 (relatos de códigos inválidos)
+
+Aplica `migrations/004_codigos_invalidos.sql`. Ela é **aditiva**: não apaga nem altera códigos, cópias ou lotes que já existem.
+
+## Regra (conservadora)
+
+**A qual publicação o relato se refere.** Quem relata cola só o texto do código, e o mesmo código pode ter sido republicado.
+- Copiou **exatamente uma** publicação desse código pelo mural: o relato vai para **ela**, mesmo que exista uma republicação mais nova. É o caso de colar o histórico do comprador.
+- Copiou **mais de uma** publicação do mesmo código: o relato fica marcado como "ambígua".
+- **Não copiou** nenhuma: fica marcado como "sem cópia".
+- Só o relato do primeiro caso, feito **até 72 h depois da cópia**, é **qualificado**. Os demais ficam registrados para o admin e **nunca** retiram nada sozinhos.
+
+**Por que tão conservador.** O comprador marca como "rejeitado" também o cupom que *aquela conta* já usou, ou que tem restrição de conta (ex.: só contas novas). Isso não prova que o cupom é inválido para todos.
+
+- **2 relatos qualificados de pessoas diferentes na mesma publicação:** ela é **suspensa** (sai da lista, do lote e das cópias). Isso não bloqueia republicar, e os relatos de uma publicação **nunca** contam para outra.
+- **Admin confirma uma publicação:** ela fica desativada como "confirmado inválido" e a combinação plataforma + código é **bloqueada**. A republicação é recusada e as outras publicações ainda ativas dessa combinação são desativadas "pelo bloqueio".
+- **Admin desbloqueia a combinação:** só libera republicar e reativa **apenas** o que foi desativado pelo bloqueio. Publicações suspensas por relatos ou confirmadas continuam desativadas.
+- **Admin reativa uma publicação:** reativa só aquela e descarta os relatos dela. Isso é recusado enquanto a combinação estiver bloqueada; desbloqueie antes.
+- **Auditoria:** toda mudança fica em `eventos_invalidos`, com publicação, estado anterior, quem fez (ou "automático") e motivo. Relatos descartados ficam guardados, com quem descartou.
+- **Desativação lógica:** nada é apagado. Cópias, lotes, a recuperação de lotes e o ranking histórico (postados e aproveitados) ficam iguais; a coluna "ativos" deixa de contar os desativados.
+
+## O que muda no banco
+
+| Objeto | Mudança |
+|---|---|
+| `codigos` | colunas novas `desativado_em` e `desativacao` (`relatos`/`admin`/`bloqueio`), nulas para tudo que já existe |
+| `relatos_invalidos`, `codigos_bloqueados`, `eventos_invalidos` | tabelas novas; RLS ligado e **nenhum acesso direto** pela API |
+| `codigos_ativos` (view) | ignora desativados |
+| `copiar_codigo`, `copiar_codigo_v2` | recusam desativados (`false` / status novo `invalidado`) |
+| `pegar_lote` | uma condição a mais (ignora desativados); critério e travas da 003 iguais |
+| `postar_codigos` | recusa combinações bloqueadas e devolve a lista nova `bloqueados` |
+| `relatar_invalidos`, `admin_codigos_invalidos`, `admin_confirmar_invalido(publicação)`, `admin_desbloquear_codigo(plataforma, código)`, `admin_reativar_publicacao(publicação)` | funções novas |
+| 001, 002, 003 e `003_..._down` | só uma verificação no começo: recusam rodar enquanto a 004 estiver ativa (sobrescreveriam os filtros). Para quem não tem a 004, nada muda |
+
+## Ordem de implantação: **site primeiro, migração depois**
+
+Situação de partida: a **005 já está ativa** em produção. A 004 não mexe na `apagar_codigo()` e mantém a correção da 005; a bateria confere isso depois de aplicar, reaplicar, reverter e reaplicar a 004.
+
+| Site \ Banco | Banco sem a 004 | Banco com a 004 |
+|---|---|---|
+| **Site antigo** (antes do merge, ou aba antiga / cache) | normal | normal, com uma exceção: ao copiar um código **desativado** a partir de uma lista desatualizada, o site antigo dá erro de JavaScript (não conhece o status `invalidado`). Nenhuma cópia é registrada; recarregar a página resolve |
+| **Site novo** | normal; "Reportar inválidos" e "Códigos reportados" mostram "o site foi atualizado, mas o banco ainda não" e **não gravam nada** | normal |
+
+### O intervalo entre o site novo e a migração
+
+- **Funciona normalmente no site novo, mesmo sem a 004:** lista, contador, copiar, lote, recuperar lote, postar, apagar, ranking e administração de membros. O site novo trata a resposta de `postar_codigos` com ou sem a lista `bloqueados`, e a cópia individual nunca recebe `invalidado` de um banco sem a 004.
+- **Falha de forma controlada até a migração:** só as partes novas (enviar relatos e o painel "Códigos reportados" do admin), com a mensagem de banco desatualizado.
+- **Não precisa de janela de manutenção nem de mecanismo extra de compatibilidade.** Basta manter o intervalo curto.
+- **Depois da migração:** abas antigas ainda abertas, ou o cache do navegador (no GitHub Pages costuma ser de até 10 minutos), continuam com o site antigo. O único problema possível é o erro ao copiar um código desativado. Logo após a migração não existe nenhum código desativado: isso só acontece depois de 2 relatos qualificados ou de uma confirmação do admin, e as duas coisas exigem o site novo. Mesmo assim, avise o grupo para recarregar a página.
+- **Não inverta a ordem.** Migração antes do site deixaria todo mundo no site antigo justamente quando os desativados começarem a existir.
+
+### Como confirmar que o site novo está publicado
+
+O merge não publica na hora: o GitHub Pages roda um deploy próprio, que pode atrasar.
+
+1. No GitHub, aba **Actions**: o fluxo **"pages build and deployment"** do commit do merge tem de estar concluído (verde).
+2. Abra o site numa **janela anônima**. Logado como membro, na aba Plataformas, o painel **"Reportar inválidos"** tem de aparecer abaixo de "Meus lotes".
+   - Sem login dá para conferir pelo código da página (Ctrl+U): procure por `painelInvalidos`.
+3. Só então siga para a migração.
+
+## Passo a passo da migração
+
+1. **Snapshot de dados** (é uma cópia das linhas, não um backup completo):
+   ```sql
+   create schema if not exists backup;
+   create table backup.codigos_antes_004 as select * from public.codigos;
+   create table backup.copias_antes_004 as select * from public.copias;
+   ```
+2. **Aplicar:** cole `migrations/004_codigos_invalidos.sql` inteiro no SQL Editor e clique em **Run**.
+   - Testado também com cada um dos comandos numa conexão separada, e interrompido em cada ponto possível antes de completar de novo. Em nenhum ponto cópias, lote, publicação ou lista ficam sem permissão.
+   - Esperado: `MIGRAÇÃO 004 APLICADA: relatos de inválidos e desativação lógica; nenhum código, cópia ou lote alterado.`
+   - `A migração 003_distribuicao_hibrida precisa estar aplicada antes da 004`: nada foi feito.
+   - `MIGRAÇÃO 004 REAPLICADA (execução nº N)`: já tinha rodado; seguro (relatos, bloqueios e desativações são mantidos).
+   - Erro no meio ou sem mensagem final: rode o arquivo inteiro de novo.
+3. **Verificar (só leitura):**
+   ```sql
+   select versao, aplicacoes, revertida_em from public.migracoes order by versao;
+   select count(*) as codigos, count(desativado_em) as desativados from public.codigos;   -- desativados = 0
+   select (select count(*) from public.copias) = (select count(*) from backup.copias_antes_004) as copias_iguais;
+   select prosrc ilike '%for update%' as correcao_005_intacta from pg_proc where proname = 'apagar_codigo';   -- true
+   ```
+   E `COM_004=1 tests/verificar_supabase_anon.sh` deve terminar em "VISITANTE ANÔNIMO NÃO ACESSA NADA". Com `COM_004=1`, o script também confere as 3 tabelas e as 5 funções novas.
+
+## Testes reais depois da migração
+
+| # | Teste | Esperado |
+|---|---|---|
+| 1 | Membro abre "Reportar inválidos", cola uma lista com repetidos e separadores misturados | 1º clique mostra quantos únicos e a plataforma; 2º envia; resumo com encontrados/reportados/não encontrados |
+| 2 | Mesma lista de novo | "você já tinha reportado" |
+| 3 | Duas pessoas que **copiaram** a mesma publicação relatam (até 72 h depois) | ela sai da lista; quem tentar copiar por uma lista antiga recebe "desativado…" |
+| 4 | Três pessoas que **não** copiaram relatam | nada muda; o admin vê os relatos |
+| 5 | Admin → "Códigos reportados" → Confirmar (2 cliques) | some do mural e aparece em "Bloqueados"; tentar postar de novo: "não entrou: confirmado como inválido" |
+| 6 | Admin → Bloqueados → Desbloquear | libera republicar; a publicação confirmada **continua** desativada |
+| 7 | Admin → Reativar naquela publicação | só ela volta ao mural (se ainda estiver dentro das 48 h e com vaga) |
+| 8 | Admin → "Histórico dos inválidos" | cada passo com estado anterior e autor |
+| 9 | Cópias, lote, recuperação, ranking e contador | como antes |
+
+## Reverter
+
+1. **Banco:** rode `migrations/004_codigos_invalidos_down.sql`. A view e as quatro funções voltam a ser **idênticas** às da 003 (o teste compara o texto), e as funções novas são removidas.
+   - **Nada é apagado:** relatos, bloqueios, eventos e colunas ficam guardados, e reaplicar a 004 depois restaura o efeito.
+   - Enquanto ela estiver revertida, os códigos desativados **voltam a aparecer** e os bloqueados podem ser republicados.
+   - Pode ser rodado de novo sem efeito.
+   - A `apagar_codigo()` **não** é tocada: a correção da 005 continua ativa.
+2. **Site (opcional):** o site novo funciona sem a 004; só os painéis novos mostram o aviso de banco desatualizado.
+
+## Checklist de implantação (004, com a 005 já ativa)
+
+- [ ] PR `feature/reportar-invalidos → main` revisado; bateria local `BATERIA COMPLETA OK`
+- [ ] Merge feito; **Actions → "pages build and deployment"** concluído para o commit do merge
+- [ ] Site novo confirmado em janela anônima: painel "Reportar inválidos" visível para um membro
+- [ ] Antes da migração, no site novo: copiar, lote, postar e apagar funcionando; "Reportar inválidos" mostra "banco ainda não atualizado"
+- [ ] SQL Editor: snapshot `backup.codigos_antes_004` e `backup.copias_antes_004`
+- [ ] SQL Editor: `004_codigos_invalidos.sql` inteiro → `MIGRAÇÃO 004 APLICADA…`
+- [ ] Verificações só de leitura: `004` e `005` ativas em `migracoes`; desativados = 0; cópias iguais ao snapshot; `correcao_005_intacta = true`
+- [ ] `COM_004=1 tests/verificar_supabase_anon.sh` → "VISITANTE ANÔNIMO NÃO ACESSA NADA"
+- [ ] Aviso no grupo: "recarreguem a página do mural"
+- [ ] Testes reais (tabela acima) com **uma conta de membro** e **uma de administrador**, de preferência com códigos de teste combinados (não de terceiros)
+- [ ] Se algo der errado: `004_codigos_invalidos_down.sql` (não apaga nada; a 005 continua ativa); o site novo segue funcionando sem a 004

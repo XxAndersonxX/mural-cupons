@@ -38,6 +38,14 @@ create table if not exists public.migracoes (
 alter table public.migracoes enable row level security;
 revoke all on public.migracoes from anon, authenticated;
 
+-- reaplicar a 001 com a 004 ativa trocaria a view e as funções filtradas pela 004
+do $$
+begin
+  if exists (select 1 from public.migracoes where versao = '004_codigos_invalidos' and revertida_em is null) then
+    raise exception 'A migração 004 está ativa: reaplicar a 001 desfaria os filtros de códigos inválidos. Reverta a 004 antes (004_codigos_invalidos_down.sql), reaplique a 001 e depois a 004. Nada foi alterado.';
+  end if;
+end $$;
+
 -- guarda se a coluna "papel" já existia ANTES desta execução
 create temporary table _m001 on commit drop as
 select exists (select 1 from information_schema.columns

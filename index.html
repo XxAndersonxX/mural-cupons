@@ -79,7 +79,7 @@ h2{font-size:18px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
 .btn.min{padding:6px 10px;font-size:13px}
-input[type=text],input[type=number],textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+input[type=text],input[type=number],select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 textarea{min-height:110px;resize:vertical;font-family:var(--mono);font-size:13px}
 label{font-size:13px;font-weight:700;color:var(--muted);display:block;margin-bottom:6px}
 .msg{font-size:13px;min-height:1.2em;margin:8px 0 0}
@@ -108,6 +108,7 @@ label{font-size:13px;font-weight:700;color:var(--muted);display:block;margin-bot
 .tag.ok{background:var(--ok-soft);color:var(--ok)}
 .tag.warn{background:var(--warn-soft);color:var(--warn)}
 .acoes{display:flex;gap:6px;justify-content:flex-end;width:104px}
+.mono{font-family:var(--mono)}
 .vazio{text-align:center;color:var(--muted);padding:28px 12px;border:1px dashed var(--line);border-radius:var(--r)}
 
 .tab-wrap{overflow-x:auto}
@@ -237,6 +238,17 @@ details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
             <p class="sub" style="font-size:13px;margin:6px 0 0">Recuperar um lote copia de novo os mesmos códigos, sem registrar novas cópias.</p>
             <div class="lotes" id="listaMeusLotes"></div>
           </details>
+          <details id="painelInvalidos">
+            <summary>Reportar inválidos</summary>
+            <p class="sub" style="font-size:13px;margin:6px 0 0">Cole só os códigos que o comprador marcou como <b>rejeitados</b> — não os pendentes nem os que deram erro de conexão. Relatar não apaga nada: um código só sai do mural quando duas pessoas que copiaram <i>aquela</i> publicação pelo mural relatam (até 72 h depois de copiar), ou quando um administrador confirma.</p>
+            <div class="linha" style="margin-top:8px">
+              <div style="width:130px"><label for="selPlatInv">Plataforma</label>
+                <select id="selPlatInv"><option>777</option><option>BRA365</option><option>Sorte25</option><option>77</option></select></div>
+            </div>
+            <textarea id="inInvalidos" rows="4" style="margin-top:8px" placeholder="Um por linha, ou separados por espaço, vírgula ou ponto e vírgula"></textarea>
+            <div class="linha" style="margin-top:8px"><button class="btn sec" id="btnInvalidos" type="button">Verificar e enviar</button></div>
+            <p class="msg" id="msgInvalidos" role="status"></p>
+          </details>
         </div>
       </div>
 
@@ -325,6 +337,15 @@ details summary{cursor:pointer;font-weight:700;font-size:14px;margin-top:12px}
         <h2>Pedidos recusados</h2>
         <table><thead><tr><th>Usuário</th><th>Pediu em</th><th></th></tr></thead><tbody id="tbRejeitados"></tbody></table>
       </div>
+      <div class="painel tab-wrap" id="painelReportados">
+        <h2>Códigos reportados como inválidos</h2>
+        <p class="sub" style="font-size:13px">“Confirmar” desativa a publicação e bloqueia republicar o código nessa plataforma. “Desbloquear” só libera a republicação (e reativa o que o bloqueio tinha desativado). “Reativar” vale só para aquela publicação e descarta os relatos dela. Relatos qualificados = de quem copiou essa publicação pelo mural nas últimas 72 h.</p>
+        <p class="msg" id="msgReportados" role="status"></p>
+        <table><thead><tr><th>Código</th><th>Autor</th><th>Relatos</th><th>Situação</th><th></th></tr></thead><tbody id="tbReportados"></tbody></table>
+        <h2 style="margin-top:14px;font-size:15px">Bloqueados (não podem ser republicados)</h2>
+        <table><thead><tr><th>Código</th><th>Bloqueado em</th><th>Motivo</th><th></th></tr></thead><tbody id="tbBloqueados"></tbody></table>
+        <details style="margin-top:6px"><summary>Histórico dos inválidos</summary><div id="listaEventosInv" style="display:grid;gap:4px;margin-top:6px"></div></details>
+      </div>
       <div class="painel">
         <h2>Histórico recente</h2>
         <div id="listaEventos"></div>
@@ -357,6 +378,8 @@ const CODIGOS_CONHECIDOS = [
   "sem_username_no_token", "username_invalido", "nome_em_uso", "nao_logado", "acesso_negado",
   "nao_admin", "nao_pode_alterar_a_si_mesmo", "estado_mudou", "acao_invalida", "ultimo_admin",
   "motivo_longo", "usuario_inexistente", "maximo_200_por_vez", "banco_desatualizado", "quantidade_invalida", "lote_nao_encontrado", "lote_ocupado", "lista_incompleta",
+  "plataforma_invalida", "lista_vazia", "maximo_500_por_vez", "codigo_invalido", "indisponivel_demo",
+  "codigo_bloqueado", "codigo_inexistente",
 ];
 const MENSAGENS = {
   config_incompleta: "A configuração do site está incompleta: falta alguma das três chaves no começo do index.html.",
@@ -378,6 +401,13 @@ const MENSAGENS = {
   maximo_200_por_vez: "Máximo de 200 códigos por vez.",
   quantidade_invalida: "Escolha uma quantidade entre 1 e 200.",
   lista_incompleta: "Não foi possível carregar a lista completa agora (a conexão falhou no meio). A tela continua mostrando a última lista completa. Toque em “Tentar de novo”.",
+  plataforma_invalida: "Escolha uma das plataformas do mural.",
+  lista_vazia: "Cole pelo menos um código.",
+  maximo_500_por_vez: "Máximo de 500 códigos por envio. Divida a lista em partes.",
+  codigo_invalido: "Esse código tem um formato inválido.",
+  codigo_bloqueado: "Essa combinação está bloqueada. Desbloqueie primeiro (em “Bloqueados”) e depois reative a publicação.",
+  codigo_inexistente: "Essa publicação não existe mais. A lista foi atualizada.",
+  indisponivel_demo: "Indisponível no modo de demonstração.",
   lote_ocupado: "Muita gente pegando códigos desta plataforma agora. Nada foi registrado: tente de novo em alguns segundos.",
   lote_nao_encontrado: "Esse lote não está mais disponível (só dá para recuperar lotes seus das últimas 48 horas).",
   banco_desatualizado: "O site foi atualizado, mas o banco de dados ainda não. Avise um administrador (docs/IMPLANTACAO.md) e tente de novo em alguns minutos.",
@@ -537,6 +567,11 @@ function criarLojaReal() {
     recuperarLote: id => rpc("recuperar_lote", id ? { p_lote: id } : {}),
     meusLotes: () => rpc("meus_lotes"),
     apagar: id => rpc("apagar_codigo", { p_id: id }),
+    relatarInvalidos: (plataforma, codigos) => rpc("relatar_invalidos", { p_plataforma: plataforma, p_codigos: codigos }),
+    adminInvalidos: () => rpc("admin_codigos_invalidos"),
+    confirmarInvalido: codigoId => rpc("admin_confirmar_invalido", { p_codigo_id: codigoId }),
+    desbloquearCodigo: (plataforma, codigo) => rpc("admin_desbloquear_codigo", { p_plataforma: plataforma, p_codigo: codigo }),
+    reativarPublicacao: codigoId => rpc("admin_reativar_publicacao", { p_codigo_id: codigoId }),
     async adminUsuarios() {
       // mesma ordem de antes (por criado_em), agora sem o corte de linhas
       return (await lerTudo("usuarios", "id,nome,papel,situacao,criado_em,atualizado_em"))
@@ -663,6 +698,11 @@ function criarLojaDemo() {
       e.codigos = e.codigos.filter(c => !(c.id === id && c.autorId === meuId && !c.copiadoPor.length)); gravar(e);
       return e.codigos.length < antes;
     },
+    async relatarInvalidos() { exigeMembro(ler()); throw erroCom("indisponivel_demo"); },
+    async adminInvalidos() { return { publicacoes: [], bloqueados: [], eventos: [] }; },
+    async confirmarInvalido() { throw erroCom("indisponivel_demo"); },
+    async desbloquearCodigo() { throw erroCom("indisponivel_demo"); },
+    async reativarPublicacao() { throw erroCom("indisponivel_demo"); },
     async adminUsuarios() { const e = ler(); if (e.usuarios[meuId]?.papel !== "admin") throw erroCom("nao_admin"); return Object.values(e.usuarios); },
     async adminEventos() { return ler().eventos.slice(0, 30); },
     async alterarAcesso(alvo, acao, motivo, versao) {
@@ -710,6 +750,7 @@ const ativo = c => c.copias < MAX_COPIAS && c.criadoEm + VALIDADE_MS > Date.now(
 // é informação, não reserva — outros podem copiar antes.
 const disponivelPara = (c, idLogado) => ativo(c) && c.autorId !== idLogado && !c.copiadoPor.includes(idLogado);
 let listaCarregada = false;   // só mostra o contador depois de uma carga completa
+let envioInvalidos = null;    // relato de inválidos aguardando o 2º clique: { plataforma, codigos }
 
 function restante(c) {
   const ms = c.criadoEm + VALIDADE_MS - Date.now();
@@ -834,6 +875,7 @@ function renderPlats() {
   }).join("");
   $("nomePlatPost").textContent = plataforma;
   $("tituloLista").textContent = `Códigos ${plataforma}`;
+  if (!$("painelInvalidos").open && !envioInvalidos) $("selPlatInv").value = plataforma;   // relato começa na aba atual
   const mostrar = !!(eu && eu.acesso && eu.id && listaCarregada);
   $("dispLista").hidden = !mostrar;
   if (mostrar) $("dispQtd").textContent = codigos.filter(c => c.plataforma === plataforma && disponivelPara(c, eu.id)).length;
@@ -958,6 +1000,7 @@ async function atualizarAdmin() {
     [adminUsuarios, adminEventos] = await Promise.all([loja.adminUsuarios(), loja.adminEventos()]);
     renderAdmin();
   } catch (e) { console.error(e); $("msgAdmin").className = "msg bad"; $("msgAdmin").textContent = mensagemDeErro(e); }
+  await atualizarReportados();
 }
 
 let acaoPendente = null;
@@ -1073,6 +1116,126 @@ $("plats").addEventListener("click", e => {
   renderPlats(); renderLista();
 });
 
+/* ---------- reportar inválidos ---------- */
+// 1º clique: confere a lista e pede confirmação; 2º clique: envia. Qualquer
+// mudança na lista ou na plataforma cancela a confirmação.
+function cancelarEnvioInvalidos() {
+  envioInvalidos = null;
+  $("btnInvalidos").textContent = "Verificar e enviar";
+}
+$("painelInvalidos").addEventListener("toggle", () => {
+  if ($("painelInvalidos").open && !$("inInvalidos").value.trim()) $("selPlatInv").value = plataforma;
+});
+$("inInvalidos").addEventListener("input", cancelarEnvioInvalidos);
+$("selPlatInv").addEventListener("change", cancelarEnvioInvalidos);
+$("btnInvalidos").addEventListener("click", async () => {
+  const msg = $("msgInvalidos"), btn = $("btnInvalidos");
+  if (btn.disabled) return;
+  if (!envioInvalidos) {
+    const brutos = $("inInvalidos").value.replace(/[{}]/g, " ").split(/[\s,;]+/).filter(Boolean);
+    const codigos = [...new Set(brutos)];
+    msg.className = "msg";
+    if (!codigos.length) { msg.className = "msg bad"; msg.textContent = MENSAGENS.lista_vazia; return; }
+    if (codigos.length > 500) { msg.className = "msg bad"; msg.textContent = MENSAGENS.maximo_500_por_vez; return; }
+    const plat = $("selPlatInv").value, invalidos = codigos.filter(c => !codigoValido(c)).length, dup = brutos.length - codigos.length;
+    envioInvalidos = { plataforma: plat, codigos };
+    msg.textContent = `${codigos.length} ${codigos.length === 1 ? "código único" : "códigos únicos"} para ${plat}` +
+      (dup ? ` (${dup} repetido${dup === 1 ? "" : "s"} na lista, removido${dup === 1 ? "" : "s"})` : "") +
+      (invalidos ? `; ${invalidos} com formato inválido ${invalidos === 1 ? "será ignorado" : "serão ignorados"}` : "") +
+      ". Confira a plataforma e clique de novo para enviar.";
+    btn.textContent = `Enviar ${codigos.length} para ${plat}?`;
+    return;
+  }
+  const { plataforma: plat, codigos } = envioInvalidos;
+  btn.disabled = true; btn.textContent = "Enviando…"; msg.className = "msg"; msg.textContent = `Enviando ${codigos.length}…`;
+  try {
+    const r = await loja.relatarInvalidos(plat, codigos);
+    const partes = [`${r.encontrados} de ${r.recebidos} encontrados no mural (${plat})`,
+      `${r.reportados} ${r.reportados === 1 ? "reportado" : "reportados"} agora`];
+    if (r.nao_contam) partes.push(`${r.nao_contam} não ${r.nao_contam === 1 ? "conta" : "contam"} para a retirada automática (você não copiou essa publicação pelo mural, copiou há mais de 72 h ou copiou mais de uma publicação do mesmo código)`);
+    if (r.ja_reportados) partes.push(`${r.ja_reportados} você já tinha reportado`);
+    if (r.ja_desativados) partes.push(`${r.ja_desativados} já ${r.ja_desativados === 1 ? "estava desativado" : "estavam desativados"}`);
+    if (r.nao_encontrados) partes.push(`${r.nao_encontrados} não ${r.nao_encontrados === 1 ? "encontrado" : "encontrados"} nesta plataforma`);
+    if (r.proprios) partes.push(`${r.proprios} ${r.proprios === 1 ? "é seu" : "são seus"} (use Apagar)`);
+    if (r.formato_invalido) partes.push(`${r.formato_invalido} com formato inválido`);
+    let t = partes.join("; ") + ".";
+    if (r.suspensos_agora) t += ` ${r.suspensos_agora} ${r.suspensos_agora === 1 ? "saiu" : "saíram"} do mural agora (duas pessoas que copiaram relataram).`;
+    msg.className = "msg ok"; msg.textContent = t;
+    $("inInvalidos").value = "";
+    if (r.suspensos_agora) await atualizar();
+  } catch (err) {
+    console.error(err); msg.className = "msg bad"; msg.textContent = mensagemDeErro(err);
+  } finally {
+    btn.disabled = false; cancelarEnvioInvalidos();
+  }
+});
+
+/* ---------- administração: códigos reportados ---------- */
+let reportados = { publicacoes: [], bloqueados: [] };
+async function atualizarReportados() {
+  if (eu?.papel !== "admin") return;
+  try { reportados = await loja.adminInvalidos(); renderReportados(); }
+  catch (e) { console.error(e); $("msgReportados").className = "msg bad"; $("msgReportados").textContent = mensagemDeErro(e); }
+}
+function renderReportados() {
+  const SIT = { admin: "Confirmado inválido", bloqueio: "Desativado pelo bloqueio", relatos: "Suspenso por relatos" };
+  const sit = p => SIT[p.desativacao] || (!p.dentro_48h ? "Vencido" : p.copias >= 3 ? "Esgotado" : "Ativo");
+  const botao = (acao, rotulo, extra, sec = true) => `<button class="btn ${sec ? "sec " : ""}min" type="button" data-inv="${acao}" ${extra}>${rotulo}</button>`;
+  $("tbReportados").innerHTML = reportados.publicacoes.length ? reportados.publicacoes.map(p => {
+    const id = `data-id-inv="${p.codigo_id}" data-cod-inv="${esc(p.codigo)}" data-plat-inv="${esc(p.plataforma)}"`;
+    return `<tr>
+      <td><b class="mono">${esc(p.codigo)}</b><br><small class="sub">${esc(p.plataforma)} · ${dataHora(p.criado_em)} · ${p.copias}/3${p.bloqueado ? " · bloqueado" : ""}</small></td>
+      <td>${esc(p.autor)}</td><td>${p.relatos} (${p.qualificados} qualif.)</td><td>${sit(p)}</td>
+      <td style="white-space:nowrap;text-align:right">
+        ${p.desativacao === "admin" ? "" : botao("confirmar", "Confirmar", id, false)}
+        ${p.desativado_em ? botao("reativar", "Reativar", id) : p.relatos ? botao("reativar", "Descartar relatos", id) : ""}
+      </td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="sub">Nenhum relato pendente nos últimos 30 dias.</td></tr>`;
+  $("tbBloqueados").innerHTML = reportados.bloqueados.length ? reportados.bloqueados.map(b => `<tr>
+      <td><b class="mono">${esc(b.codigo)}</b><br><small class="sub">${esc(b.plataforma)}${b.por ? " · por " + esc(b.por) : ""}</small></td>
+      <td>${dataHora(b.bloqueado_em)}</td><td>${esc(b.motivo || "")}</td>
+      <td style="white-space:nowrap;text-align:right">${botao("desbloquear", "Desbloquear", `data-cod-inv="${esc(b.codigo)}" data-plat-inv="${esc(b.plataforma)}"`)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="sub">Nenhum código bloqueado.</td></tr>`;
+  const ACAO = { suspenso_automatico: "suspenso automaticamente", confirmado: "confirmado inválido", desativado_por_bloqueio: "desativado pelo bloqueio",
+                 desbloqueado: "desbloqueado", reativado_por_desbloqueio: "reativado pelo desbloqueio", reativado: "reativado", relatos_descartados: "relatos descartados" };
+  $("listaEventosInv").innerHTML = (reportados.eventos || []).slice(0, 20).map(ev =>
+    `<div class="sub" style="font-size:13px">${dataHora(ev.criado_em)} · <b class="mono">${esc(ev.codigo)}</b> (${esc(ev.plataforma)}${ev.codigo_id ? " #" + ev.codigo_id : ""}) ${ACAO[ev.acao] || esc(ev.acao)}${ev.estado_anterior ? " (antes: " + esc(ev.estado_anterior) + ")" : ""} · ${ev.por ? esc(ev.por) : "automático"}${ev.motivo ? " — " + esc(ev.motivo) : ""}</div>`).join("")
+    || `<div class="sub" style="font-size:13px">Nada ainda.</div>`;
+}
+$("painelReportados").addEventListener("click", async e => {
+  const b = e.target.closest("[data-inv]"); if (!b || b.disabled) return;
+  if (b.dataset.confirma !== "1") {           // 1º clique pede confirmação
+    b.dataset.confirma = "1";
+    b.textContent = { confirmar: "Confirmar inválido?", reativar: "Reativar só esta?", desbloquear: "Liberar republicação?" }[b.dataset.inv];
+    return;
+  }
+  const acao = b.dataset.inv, id = Number(b.dataset.idInv), cod = b.dataset.codInv, plat = b.dataset.platInv, msg = $("msgReportados");
+  $("painelReportados").querySelectorAll("[data-inv]").forEach(x => x.disabled = true);
+  msg.className = "msg"; msg.textContent = "Salvando…";
+  try {
+    if (acao === "confirmar") {
+      const r = await loja.confirmarInvalido(id);
+      msg.textContent = r.status === "ja_confirmado" ? `${cod} (${plat}) já estava confirmado.`
+        : `${cod} (${plat}) confirmado como inválido. Republicação bloqueada${r.desativados_pelo_bloqueio ? `; ${r.desativados_pelo_bloqueio} outra(s) publicação(ões) ativa(s) desativada(s) pelo bloqueio` : ""}.`;
+    } else if (acao === "desbloquear") {
+      const r = await loja.desbloquearCodigo(plat, cod);
+      msg.textContent = r.status === "nao_bloqueado" ? `${cod} (${plat}) não estava bloqueado.`
+        : `${cod} (${plat}) desbloqueado: pode ser republicado. ${r.reativados} reativada(s) (desativadas só pelo bloqueio); ${r.continuam_desativados} continua(m) desativada(s) — reative uma a uma, se for o caso.`;
+    } else {
+      const r = await loja.reativarPublicacao(id);
+      msg.textContent = r.status === "nada_a_reverter" ? `${cod} (${plat}): nada a reverter.`
+        : r.status === "relatos_descartados" ? `${cod} (${plat}): ${r.relatos_descartados} relato(s) descartado(s).`
+        : `${cod} (${plat}) reativado (só esta publicação); ${r.relatos_descartados} relato(s) descartado(s).`;
+    }
+    msg.className = "msg ok";
+    await atualizar();
+  } catch (err) {
+    console.error(err); msg.className = "msg bad"; msg.textContent = mensagemDeErro(err);
+  } finally {
+    await atualizarReportados();
+  }
+});
+
 $("btnPostar").addEventListener("click", async () => {
   const msg = $("msgPostar"); msg.className = "msg";
   const todos = extrairCodigos($("inCodigos").value);
@@ -1084,6 +1247,7 @@ $("btnPostar").addEventListener("click", async () => {
     const r = await loja.postar(plataforma, validos);
     let t = `${r.adicionados} ${r.adicionados === 1 ? "código postado" : "códigos postados"} em ${plataforma}.`;
     if (r.repetidos.length) t += ` ${r.repetidos.length} já estavam no mural.`;
+    if (r.bloqueados?.length) t += ` ${r.bloqueados.length} não ${r.bloqueados.length === 1 ? "entrou" : "entraram"}: confirmado${r.bloqueados.length === 1 ? "" : "s"} como inválido${r.bloqueados.length === 1 ? "" : "s"} (${r.bloqueados.slice(0, 5).join(", ")}${r.bloqueados.length > 5 ? "…" : ""}).`;
     if (invalidos.length) t += ` ${invalidos.length} ignorados por formato inválido.`;
     msg.className = "msg ok"; msg.textContent = t;
     $("inCodigos").value = "";
@@ -1101,6 +1265,7 @@ const MSG_COPIA = {
   esgotado: () => "Esse código acabou de esgotar (3 pessoas já pegaram). Nada foi copiado.",
   expirado: () => "Esse código venceu (passou de 48 horas). Nada foi copiado.",
   inexistente: () => "Esse código foi apagado pelo autor. Nada foi copiado.",
+  invalidado: () => "Esse código foi desativado por ter sido relatado como inválido. Nada foi copiado.",
 };
 
 $("lista").addEventListener("click", async e => {
@@ -1121,7 +1286,7 @@ $("lista").addEventListener("click", async e => {
     }
     const serve = COPIA_SERVE.has(r.status);
     msg.className = serve ? "msg ok" : "msg bad";
-    msg.textContent = MSG_COPIA[r.status](r.codigo);
+    msg.textContent = (MSG_COPIA[r.status] || (() => "Não foi possível copiar esse código agora."))(r.codigo);
     if (serve && res !== "ok") {
       msg.textContent += " A cópia automática não funcionou neste navegador: copie abaixo.";
       mostrarCopiaManual(msg, r.codigo);
