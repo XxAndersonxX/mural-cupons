@@ -378,16 +378,26 @@ verifica "após reaplicar: desativações valem de novo" \
      and (public.copiar_codigo_v2((select max(id) from public.codigos where codigo = 'DOWN4A')) ->> 'status') = 'invalidado',
      'reaplicada: desativados guardados voltam a valer');"
 sql "permissões finais com a 004"           tests/04_permissoes.sql | tail -n 1
+verifica "004 preserva a correção da 005" \
+  "select teste.ok((select prosrc ilike '%for update%' from pg_proc where proname = 'apagar_codigo')
+     and (select revertida_em is null from public.migracoes where versao = '005_apagar_codigo_trava'),
+     '004 aplicada, reaplicada, revertida e reaplicada: apagar_codigo da 005 intacta');"
+ETAPA="exclusão x cópias com a 004"; echo "== exclusão x cópias com 004 + 005 no mesmo banco"
+PSQL="$PSQL_BASE -d $DB" tests/13_apagar_concorrencia.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+grep -E "^ok|PASSARAM" "$LOG"
 
-ETAPA="regressão com a 004"; echo "== regressão: testes das Fases 2 e 3 (06, 07, 09, 10) num banco novo com 001..004"
+ETAPA="regressão com a 004"; echo "== regressão: testes das Fases 2, 3 e da 005 (06, 07, 09, 10, 13) num banco novo com 001..005"
 DB3=${DB}_f4
 trap '$PSQL_BASE -q -X -c "drop database if exists $DB" >/dev/null 2>&1 || true; $PSQL_BASE -q -X -c "drop database if exists $DB2" >/dev/null 2>&1 || true; $PSQL_BASE -q -X -c "drop database if exists $DB3" >/dev/null 2>&1 || true; rm -f "$LOG"' EXIT
 $PSQL_BASE -q -X -v ON_ERROR_STOP=1 -c "create database $DB3" >/dev/null
 P3="$PSQL_BASE -q -X -A -t -v ON_ERROR_STOP=1 -d $DB3"
 for f in tests/00_simular_supabase.sql supabase.sql tests/01_dados_existentes.sql migrations/001_membros.sql \
-         migrations/002_copias_ranking.sql migrations/003_distribuicao_hibrida.sql migrations/004_codigos_invalidos.sql; do
+         migrations/002_copias_ranking.sql migrations/003_distribuicao_hibrida.sql migrations/004_codigos_invalidos.sql \
+         migrations/005_apagar_codigo_trava.sql; do
   $P3 -f "$f" >"$LOG" 2>&1 || { cat "$LOG"; false; }
 done
+PSQL="$PSQL_BASE -d $DB3" tests/13_apagar_concorrencia.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
+echo "ok  13_apagar_concorrencia.sh com 001..005: $(grep -c '^ok' "$LOG") cenários"
 $P3 -v fase3=1 -f tests/06_copias.sql >"$LOG" 2>&1 || { cat "$LOG"; false; }
 echo "ok  06_copias.sql com a 004: $(grep -c '^ok' "$LOG") verificações"
 PSQL="$PSQL_BASE -d $DB3" tests/07_concorrencia_lote.sh >"$LOG" 2>&1 || { cat "$LOG"; false; }
